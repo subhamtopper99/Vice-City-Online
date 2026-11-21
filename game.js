@@ -1,9 +1,10 @@
 import * as THREE from "https://esm.sh/three@0.160.0";
 
 /* =========================================================
-   VICE CITY — UPDATE 22
-   ROAD-BOUND TRAFFIC + SIDEWALK PEDESTRIANS + TEXTURES
-   Garage, five vehicles, multiplayer, chat and missions.
+   VICE CITY — UPDATE 22.1
+   Complete game.js
+   Gender selection, garage, five vehicles, multiplayer,
+   chat, missions, road traffic and sidewalk pedestrians.
    ========================================================= */
 
 const CONFIG = {
@@ -154,6 +155,7 @@ function makeTexture(base, type = "noise") {
 
     ctx.strokeStyle = "rgba(40,40,40,.12)";
     ctx.lineWidth = 2;
+
     for (let p = 0; p <= 256; p += 64) {
       ctx.beginPath();
       ctx.moveTo(p, 0);
@@ -164,7 +166,8 @@ function makeTexture(base, type = "noise") {
 
   if (type === "grass") {
     for (let i = 0; i < 5000; i++) {
-      ctx.fillStyle = `rgba(${rand(10,80)},${rand(65,130)},${rand(10,45)},.22)`;
+      ctx.fillStyle =
+        `rgba(${rand(10,80)},${rand(65,130)},${rand(10,45)},.22)`;
       ctx.fillRect(rand(0,256), rand(0,256), 2, 2);
     }
   }
@@ -246,11 +249,9 @@ function createRoads() {
   for (let p = -L; p <= L; p += S) {
     roadLines.push(p);
 
-    // Main roads.
     box(world, p, -.55, 0, W, .12, L * 2.1, mat.road);
     box(world, 0, -.55, p, L * 2.1, .12, W);
 
-    // Sidewalks on both sides.
     for (const side of [-1, 1]) {
       box(
         world, p + side * (W / 2 + 3), -.38, 0,
@@ -263,7 +264,6 @@ function createRoads() {
       );
     }
 
-    // Double yellow road centre markings.
     box(world, p - .18, -.475, 0, .10, .025, L * 2, mat.yellow);
     box(world, p + .18, -.475, 0, .10, .025, L * 2, mat.yellow);
 
@@ -441,7 +441,7 @@ function createCharacter(color = STREET_BLUE, gender = "male") {
   const root = new THREE.Group();
   const female = gender === "female";
 
-  const shirt = new THREE.MeshLambertMaterial({ color: STREET_BLUE });
+  const shirt = new THREE.MeshLambertMaterial({ color });
   const pants = new THREE.MeshLambertMaterial({ color: 0x26364a });
   const skin = new THREE.MeshLambertMaterial({ color: 0xc88e68 });
   const hair = new THREE.MeshLambertMaterial({ color: 0x241914 });
@@ -722,7 +722,6 @@ function createCar(color = 0xe33b2e, style = "sport") {
     part(0, .83, 0, 2.38, .55, 4.45, paint);
     part(0, 1.04, 1.35, 2.25, .27, 1.45, paint);
     part(0, 1, -1.55, 2.32, .28, 1.18, paint);
-
     part(0, 1.65, -.12, 1.75, .65, 1.8, glass);
     part(0, 2, -.12, 1.8, .12, 1.9, paint);
 
@@ -739,13 +738,10 @@ function createCar(color = 0xe33b2e, style = "sport") {
     for (const x of [-1.2, 1.2]) {
       for (const z of [-1.45, 1.45]) addWheel(x, z, .46, .3);
     }
-  }
-
-  else if (style === "supercar") {
+  } else if (style === "supercar") {
     part(0, .68, 0, 2.35, .42, 4.55, paint);
     part(0, .75, 1.45, 2.2, .25, 1.55, paint);
     part(0, .78, -1.62, 2.3, .34, 1.25, paint);
-
     part(0, 1.46, -.12, 1.65, .5, 1.65, glass);
     part(0, 1.74, -.12, 1.7, .1, 1.7, paint);
 
@@ -762,13 +758,10 @@ function createCar(color = 0xe33b2e, style = "sport") {
     for (const x of [-1.18, 1.18]) {
       for (const z of [-1.5, 1.48]) addWheel(x, z, .43, .29);
     }
-  }
-
-  else if (style === "suv") {
+  } else if (style === "suv") {
     part(0, 1.02, 0, 2.65, .78, 4.75, paint);
     part(0, 1.13, 1.52, 2.58, .42, 1.25, paint);
     part(0, 1.16, -1.68, 2.6, .42, 1.1, paint);
-
     part(0, 2.03, -.12, 2.1, 1.25, 2.65, glass);
     part(0, 2.7, -.12, 2.16, .16, 2.72, paint);
 
@@ -792,13 +785,10 @@ function createCar(color = 0xe33b2e, style = "sport") {
     for (const x of [-1.35, 1.35]) {
       for (const z of [-1.52, 1.5]) addWheel(x, z, .53, .34);
     }
-  }
-
-  else if (style === "sedan") {
+  } else if (style === "sedan") {
     part(0, .88, 0, 2.48, .58, 4.8, paint);
     part(0, 1.05, 1.45, 2.4, .3, 1.55, paint);
     part(0, 1.06, -1.68, 2.4, .3, 1.18, paint);
-
     part(0, 1.72, -.18, 1.9, .95, 2.45, glass);
     part(0, 2.23, -.18, 1.95, .13, 2.5, paint);
 
@@ -816,14 +806,10 @@ function createCar(color = 0xe33b2e, style = "sport") {
     for (const x of [-1.23, 1.23]) {
       for (const z of [-1.55, 1.52]) addWheel(x, z, .43, .29);
     }
-  }
-
-  else {
-    // Off-road Jeep silhouette.
+  } else {
     part(0, 1, 0, 2.55, .85, 4.35, paint);
     part(0, 1.22, 1.35, 2.52, .55, 1.25, paint);
     part(0, 1.18, -1.55, 2.5, .5, 1.1, paint);
-
     part(0, 2.05, -.18, 2.1, 1.25, 2.55, paint);
     part(0, 2.73, -.18, 2.25, .2, 2.9, darkPaint);
     part(0, 2.12, 1.1, 1.95, .83, .1, glass, -.06);
@@ -937,6 +923,7 @@ const hud = {
 };
 
 function showMessage(message) {
+  if (!hud.message) return;
   hud.message.textContent = message;
   hud.message.style.opacity = "1";
   messageTimer = 2.2;
@@ -973,11 +960,6 @@ function updateJump(dt) {
   }
 }
 
-### Part 2 of 2
-
-**Continue immediately after Part 1**—do not add another import or delete anything from Part 1.
-
-```js
 /* =========================================================
    GARAGE MENU
    ========================================================= */
@@ -1172,12 +1154,14 @@ const connectionElement = document.getElementById("connection");
 const playerCountElement = document.getElementById("player-count");
 
 function updateConnection(online) {
+  if (!connectionElement) return;
   connectionElement.textContent = online ? "ONLINE" : "DISCONNECTED";
   connectionElement.classList.toggle("online", online);
   connectionElement.classList.toggle("offline", !online);
 }
 
 function updatePlayerCount() {
+  if (!playerCountElement) return;
   playerCountElement.textContent =
     "PLAYERS: " + (remotePlayers.size + (myPlayerId ? 1 : 0));
 }
@@ -1550,7 +1534,6 @@ addChatLine("VICE CITY", "Welcome! Press ENTER to chat.", true);
 
 /* =========================================================
    ROAD NETWORK HELPERS
-   Traffic uses road lanes, not random coordinates.
    ========================================================= */
 
 const ROAD_HALF = CONFIG.ROAD_WIDTH / 2;
@@ -1578,7 +1561,7 @@ function roadLane(axis, road, direction) {
 }
 
 /* =========================================================
-   TRAFFIC — LANE FOLLOWING AND INTERSECTION TURNS
+   TRAFFIC — ROAD LANES AND INTERSECTION TURNS
    ========================================================= */
 
 const traffic = [];
@@ -1588,12 +1571,10 @@ const TRAFFIC_MIN_SPEED = 12;
 const TRAFFIC_MAX_SPEED = 23;
 
 function orientTrafficVehicle(t) {
-  const mesh = t.mesh;
-
   if (t.axis === "x") {
-    mesh.rotation.y = t.direction > 0 ? Math.PI / 2 : -Math.PI / 2;
+    t.mesh.rotation.y = t.direction > 0 ? Math.PI / 2 : -Math.PI / 2;
   } else {
-    mesh.rotation.y = t.direction > 0 ? 0 : Math.PI;
+    t.mesh.rotation.y = t.direction > 0 ? 0 : Math.PI;
   }
 }
 
@@ -1612,11 +1593,9 @@ function turnTraffic(t) {
 
   if (Math.random() < TRAFFIC_TURN_CHANCE) {
     t.axis = oldAxis === "x" ? "z" : "x";
-
-    // Choose a direction at the intersection.
     t.direction = Math.random() > .5 ? 1 : -1;
-
     t.road = intersection;
+
     t.mesh.position.x = oldAxis === "x"
       ? intersection
       : roadLane("z", intersection, t.direction);
@@ -1625,7 +1604,6 @@ function turnTraffic(t) {
       ? intersection
       : roadLane("x", intersection, t.direction);
   } else {
-    // Continue straight on the same road.
     t.road = intersection;
     t.mesh.position[oldAxis === "x" ? "z" : "x"] =
       roadLane(oldAxis, t.road, oldDirection);
@@ -1678,8 +1656,7 @@ function createTraffic() {
 
 function updateTraffic(dt) {
   for (const t of traffic) {
-    const movement = t.speed * t.direction * dt;
-    t.mesh.position[t.axis] += movement;
+    t.mesh.position[t.axis] += t.speed * t.direction * dt;
 
     const passed = t.direction > 0
       ? t.mesh.position[t.axis] >= t.nextIntersection
@@ -1694,7 +1671,6 @@ function updateTraffic(dt) {
       Math.abs(t.mesh.position.x) > CONFIG.CITY_LIMIT - 20 ||
       Math.abs(t.mesh.position.z) > CONFIG.CITY_LIMIT - 20
     ) {
-      // Re-enter at the opposite end of the same road.
       t.mesh.position[t.axis] = -t.direction * (CONFIG.CITY_LIMIT - 30);
       t.road = randomRoadLine();
       setTrafficLane(t);
@@ -1708,10 +1684,7 @@ function updateTraffic(dt) {
 }
 
 /* =========================================================
-   PEDESTRIANS — SIDEWALK PATH NETWORK
-   Pedestrians walk along sidewalk segments and turn at
-   intersections. Their positions are never randomly placed
-   in the middle of buildings or on the road.
+   PEDESTRIANS — SIDEWALK PATHS
    ========================================================= */
 
 const pedestrians = [];
@@ -1726,9 +1699,7 @@ function sidewalkCoordinate(axis, road, side) {
 }
 
 function choosePedestrianRoute(p) {
-  const turn = Math.random() > .5;
-
-  if (turn) {
+  if (Math.random() > .5) {
     p.axis = p.axis === "x" ? "z" : "x";
     p.direction = Math.random() > .5 ? 1 : -1;
     p.road = nearestRoadLine(
@@ -1739,10 +1710,10 @@ function choosePedestrianRoute(p) {
   }
 
   p.nextIntersection = p.progressRoad + p.direction * CONFIG.ROAD_SPACING;
-  p.mesh.rotation.y =
-    p.axis === "x"
-      ? (p.direction > 0 ? Math.PI / 2 : -Math.PI / 2)
-      : (p.direction > 0 ? 0 : Math.PI);
+
+  p.mesh.rotation.y = p.axis === "x"
+    ? (p.direction > 0 ? Math.PI / 2 : -Math.PI / 2)
+    : (p.direction > 0 ? 0 : Math.PI);
 }
 
 function setPedestrianPathPosition(p) {
@@ -1761,6 +1732,7 @@ function createPedestrian() {
   const road = randomRoadLine();
   const direction = Math.random() > .5 ? 1 : -1;
   const side = Math.random() > .5 ? 1 : -1;
+  const progress = rand(-800, 800);
 
   const p = {
     mesh: person,
@@ -1769,16 +1741,22 @@ function createPedestrian() {
     direction,
     side,
     speed: rand(1.1, 2.0),
-    progressRoad: rand(-800, 800),
+    progressRoad: progress,
     nextIntersection: 0
   };
 
   p.nextIntersection =
-    p.progressRoad + direction * CONFIG.ROAD_SPACING;
+    (Math.floor(progress / CONFIG.ROAD_SPACING) * CONFIG.ROAD_SPACING) +
+    (direction > 0 ? CONFIG.ROAD_SPACING : 0);
+
+  // Keep the initial pedestrian on a sidewalk and align the
+  // route progress with the pedestrian's actual position.
+  p.progressRoad = progress;
+  p.nextIntersection = progress + direction * CONFIG.ROAD_SPACING;
 
   if (axis === "x") {
     person.position.set(
-      rand(-850, 850),
+      progress,
       0,
       sidewalkCoordinate(axis, road, side)
     );
@@ -1787,7 +1765,7 @@ function createPedestrian() {
     person.position.set(
       sidewalkCoordinate(axis, road, side),
       0,
-      rand(-850, 850)
+      progress
     );
     person.rotation.y = direction > 0 ? 0 : Math.PI;
   }
@@ -1809,20 +1787,20 @@ function updatePedestrians(dt) {
     if (reached) {
       p.progressRoad = p.nextIntersection;
       p.mesh.position[p.axis] = p.progressRoad;
+
       choosePedestrianRoute(p);
       setPedestrianPathPosition(p);
     }
 
     if (Math.abs(p.mesh.position[p.axis]) > 870) {
       p.direction *= -1;
+      p.progressRoad = p.mesh.position[p.axis];
       p.nextIntersection =
-        p.mesh.position[p.axis] +
-        p.direction * CONFIG.ROAD_SPACING;
+        p.progressRoad + p.direction * CONFIG.ROAD_SPACING;
 
-      p.mesh.rotation.y =
-        p.axis === "x"
-          ? (p.direction > 0 ? Math.PI / 2 : -Math.PI / 2)
-          : (p.direction > 0 ? 0 : Math.PI);
+      p.mesh.rotation.y = p.axis === "x"
+        ? (p.direction > 0 ? Math.PI / 2 : -Math.PI / 2)
+        : (p.direction > 0 ? 0 : Math.PI);
     }
 
     animateCharacter(p.mesh, dt, true, 1);
@@ -1980,7 +1958,9 @@ function bindMobileControl(id, name) {
     element.setPointerCapture?.(event.pointerId);
   });
 
-  const release = () => controls[name] = false;
+  const release = () => {
+    controls[name] = false;
+  };
 
   element.addEventListener("pointerup", release);
   element.addEventListener("pointercancel", release);
@@ -2027,7 +2007,6 @@ function toggleVehicle() {
 
 /* =========================================================
    MOVEMENT
-   The previously fixed A/D steering direction is preserved.
    ========================================================= */
 
 function updatePlayer(dt) {
@@ -2161,22 +2140,28 @@ function updateCamera(dt) {
    ========================================================= */
 
 function updateHUD(dt) {
-  hud.speed.textContent = Math.round(Math.abs(carSpeed) * 3.6);
-  hud.cash.textContent = "$" + cash;
+  if (hud.speed) hud.speed.textContent = Math.round(Math.abs(carSpeed) * 3.6);
+  if (hud.cash) hud.cash.textContent = "$" + cash;
 
-  hud.mode.textContent =
-    driving ? "DRIVING" : jumping ? "JUMPING" : "ON FOOT";
+  if (hud.mode) {
+    hud.mode.textContent =
+      driving ? "DRIVING" : jumping ? "JUMPING" : "ON FOOT";
+  }
 
-  hud.mission.textContent =
-    missionNames[checkpointIndex] || "ROUTE COMPLETE";
+  if (hud.mission) {
+    hud.mission.textContent =
+      missionNames[checkpointIndex] || "ROUTE COMPLETE";
+  }
 
-  hud.progress.textContent =
-    `${checkpointIndex + 1} / ${checkpoints.length}`;
+  if (hud.progress) {
+    hud.progress.textContent =
+      `${checkpointIndex + 1} / ${checkpoints.length}`;
+  }
 
   if (messageTimer > 0) {
     messageTimer -= dt;
 
-    if (messageTimer <= 0) {
+    if (messageTimer <= 0 && hud.message) {
       hud.message.style.opacity = "0";
     }
   }
@@ -2187,13 +2172,16 @@ function updateHUD(dt) {
    ========================================================= */
 
 const minimap = document.getElementById("minimap");
-const mapContext = minimap.getContext("2d");
+const mapContext = minimap ? minimap.getContext("2d") : null;
 
 function drawMinimap() {
+  if (!minimap || !mapContext) return;
+
   const w = minimap.width;
   const h = minimap.height;
   const scale = w / 1800;
-  const center = w / 2;
+  const centerX = w / 2;
+  const centerY = h / 2;
 
   mapContext.clearRect(0, 0, w, h);
   mapContext.fillStyle = "#263c32";
@@ -2203,16 +2191,17 @@ function drawMinimap() {
   mapContext.lineWidth = Math.max(1, 24 * scale);
 
   for (const p of roadLines) {
-    const pos = center + p * scale;
+    const posX = centerX + p * scale;
+    const posY = centerY + p * scale;
 
     mapContext.beginPath();
-    mapContext.moveTo(pos, 0);
-    mapContext.lineTo(pos, h);
+    mapContext.moveTo(posX, 0);
+    mapContext.lineTo(posX, h);
     mapContext.stroke();
 
     mapContext.beginPath();
-    mapContext.moveTo(0, pos);
-    mapContext.lineTo(w, pos);
+    mapContext.moveTo(0, posY);
+    mapContext.lineTo(w, posY);
     mapContext.stroke();
   }
 
@@ -2221,8 +2210,8 @@ function drawMinimap() {
   for (const p of checkpoints) {
     mapContext.beginPath();
     mapContext.arc(
-      center + p.position.x * scale,
-      center + p.position.z * scale,
+      centerX + p.position.x * scale,
+      centerY + p.position.z * scale,
       2.2, 0, Math.PI * 2
     );
     mapContext.fill();
@@ -2232,8 +2221,8 @@ function drawMinimap() {
     mapContext.fillStyle = "#55d9ff";
     mapContext.beginPath();
     mapContext.arc(
-      center + remote.root.position.x * scale,
-      center + remote.root.position.z * scale,
+      centerX + remote.root.position.x * scale,
+      centerY + remote.root.position.z * scale,
       3, 0, Math.PI * 2
     );
     mapContext.fill();
@@ -2244,24 +2233,43 @@ function drawMinimap() {
   mapContext.fillStyle = "#ff4136";
   mapContext.beginPath();
   mapContext.arc(
-    center + position.x * scale,
-    center + position.z * scale,
+    centerX + position.x * scale,
+    centerY + position.z * scale,
     4, 0, Math.PI * 2
   );
   mapContext.fill();
 }
 
 /* =========================================================
-   START / PAUSE / GENDER
+   START / PAUSE / GENDER SELECTION
    ========================================================= */
 
 const pauseScreen = document.getElementById("pause-screen");
 const startScreen = document.getElementById("start-screen");
 
+const genderStyle = document.createElement("style");
+genderStyle.textContent = `
+#gender-selector{
+  display:flex;justify-content:center;gap:12px;
+  margin:14px auto;flex-wrap:wrap
+}
+#gender-selector button{
+  min-width:120px;padding:12px 20px;
+  border:2px solid #f5c84c;border-radius:10px;
+  background:#18232d;color:white;font-weight:bold;
+  cursor:pointer;transition:background .15s,border-color .15s
+}
+#gender-selector button.selected{
+  background:#b7831c;border-color:#fff0a8;color:#fff
+}
+#gender-selector button:disabled{
+  cursor:not-allowed;opacity:.55
+}
+`;
+document.head.appendChild(genderStyle);
+
 const genderSelector = document.createElement("div");
 genderSelector.id = "gender-selector";
-genderSelector.style.cssText =
-  "display:flex;justify-content:center;gap:12px;margin:14px auto;flex-wrap:wrap";
 
 function makeGenderButton(gender, label) {
   const button = document.createElement("button");
@@ -2269,11 +2277,6 @@ function makeGenderButton(gender, label) {
   button.type = "button";
   button.textContent = label;
   button.dataset.gender = gender;
-
-  button.style.cssText =
-    "min-width:120px;padding:12px 20px;border:2px solid #f5c84c;" +
-    "border-radius:10px;background:#18232d;color:white;" +
-    "font-weight:bold;cursor:pointer";
 
   button.addEventListener("click", () => {
     if (requestedStart) return;
@@ -2294,14 +2297,18 @@ genderSelector.append(maleButton, femaleButton);
 const nameInput = document.getElementById("player-name");
 const startButton = document.getElementById("start");
 
-nameInput.insertAdjacentElement("afterend", genderSelector);
+if (nameInput) {
+  nameInput.insertAdjacentElement("afterend", genderSelector);
+} else if (startScreen) {
+  startScreen.appendChild(genderSelector);
+} else {
+  document.body.appendChild(genderSelector);
+}
 
 function updateGenderButtons() {
   for (const button of [maleButton, femaleButton]) {
     const selected = button.dataset.gender === selectedGender;
-
-    button.style.background = selected ? "#b7831c" : "#18232d";
-    button.style.borderColor = selected ? "#fff0a8" : "#f5c84c";
+    button.classList.toggle("selected", selected);
     button.setAttribute("aria-pressed", String(selected));
   }
 }
@@ -2317,8 +2324,8 @@ function startGame() {
   started = true;
   paused = false;
 
-  startScreen.classList.add("hidden");
-  pauseScreen.classList.add("hidden");
+  if (startScreen) startScreen.classList.add("hidden");
+  if (pauseScreen) pauseScreen.classList.add("hidden");
 
   showMessage("WELCOME TO VICE CITY");
 }
@@ -2327,7 +2334,10 @@ function togglePause() {
   if (!started || chatOpen || garageOpen) return;
 
   paused = !paused;
-  pauseScreen.classList.toggle("hidden", !paused);
+
+  if (pauseScreen) {
+    pauseScreen.classList.toggle("hidden", !paused);
+  }
 
   if (paused) clearControls();
 }
@@ -2353,70 +2363,89 @@ function restartGame() {
   cash = 0;
   checkpointIndex = 0;
 
+  paused = false;
   clearControls();
-  startGame();
+
+  if (pauseScreen) pauseScreen.classList.add("hidden");
+
+  if (!started) {
+    if (myPlayerId) startGame();
+    else showMessage("CONNECTING TO SERVER");
+  } else {
+    showMessage("GAME RESTARTED");
+  }
 }
 
-startButton.addEventListener("click", () => {
-  const entered = nameInput.value.trim();
+if (startButton) {
+  startButton.addEventListener("click", () => {
+    const entered = nameInput ? nameInput.value.trim() : "";
 
-  if (!entered) {
-    showMessage("ENTER YOUR PLAYER NAME");
-    nameInput.focus();
-    return;
-  }
+    if (!entered) {
+      showMessage("ENTER YOUR PLAYER NAME");
+      if (nameInput) nameInput.focus();
+      return;
+    }
 
-  if (!socket.connected) {
-    showMessage("SERVER NOT CONNECTED");
-    return;
-  }
+    if (!socket.connected) {
+      showMessage("SERVER NOT CONNECTED");
+      return;
+    }
 
-  myPlayerName = entered.slice(0, 16);
-  requestedStart = true;
+    myPlayerName = entered.slice(0, 16);
+    requestedStart = true;
 
-  maleButton.disabled = true;
-  femaleButton.disabled = true;
-  maleButton.style.opacity = ".55";
-  femaleButton.style.opacity = ".55";
+    maleButton.disabled = true;
+    femaleButton.disabled = true;
 
-  joinGame();
-  showMessage("CONNECTING AS " + myPlayerName.toUpperCase());
-});
+    joinGame();
+    showMessage("CONNECTING AS " + myPlayerName.toUpperCase());
+  });
+}
 
-nameInput.addEventListener("keydown", event => {
-  if (event.key === "Enter") startButton.click();
-});
+if (nameInput) {
+  nameInput.addEventListener("keydown", event => {
+    if (event.key === "Enter" && startButton) startButton.click();
+  });
+}
 
-document.getElementById("resume-button").addEventListener("click", () => {
-  if (paused) togglePause();
-});
+const resumeButton = document.getElementById("resume-button");
+const restartButton = document.getElementById("restart-button");
+const menuButton = document.getElementById("menu-button");
 
-document.getElementById("restart-button").addEventListener("click", restartGame);
+if (resumeButton) {
+  resumeButton.addEventListener("click", () => {
+    if (paused) togglePause();
+  });
+}
 
-document.getElementById("menu-button").addEventListener("click", () => {
-  closeGarage();
-  closeChat();
+if (restartButton) {
+  restartButton.addEventListener("click", restartGame);
+}
 
-  paused = false;
-  started = false;
-  requestedStart = false;
-  multiplayerJoined = false;
+if (menuButton) {
+  menuButton.addEventListener("click", () => {
+    closeGarage();
+    closeChat();
 
-  socket.disconnect();
-  myPlayerId = null;
+    paused = false;
+    started = false;
+    requestedStart = false;
+    multiplayerJoined = false;
 
-  maleButton.disabled = false;
-  femaleButton.disabled = false;
-  maleButton.style.opacity = "1";
-  femaleButton.style.opacity = "1";
+    socket.disconnect();
+    myPlayerId = null;
 
-  pauseScreen.classList.add("hidden");
-  startScreen.classList.remove("hidden");
+    maleButton.disabled = false;
+    femaleButton.disabled = false;
 
-  clearControls();
+    if (pauseScreen) pauseScreen.classList.add("hidden");
+    if (startScreen) startScreen.classList.remove("hidden");
 
-  setTimeout(() => socket.connect(), 300);
-});
+    clearControls();
+
+    setTimeout(() => socket.connect(), 300);
+  });
+}
 
 /* =========================================================
    RESIZE

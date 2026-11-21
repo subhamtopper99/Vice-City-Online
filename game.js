@@ -1,10 +1,10 @@
 import * as THREE from "https://esm.sh/three@0.160.0";
 
 /* =========================================================
-   VICE CITY — UPDATE 23
+   VICE CITY — UPDATE 24
    Complete game.js
-   Gender selection, garage, five vehicles, multiplayer,
-   chat, missions, traffic, pedestrians and collisions.
+   Original Update 23 visuals preserved.
+   Multiplayer connection and reconnection improvements.
    ========================================================= */
 
 const CONFIG = {
@@ -181,7 +181,6 @@ const buildingTexture = makeTexture("#a6a092", "building");
 buildingTexture.repeat.set(1, 2);
 
 const mat = {
-  // Fixed dark road colour prevents white roads if a texture fails.
   road: new THREE.MeshLambertMaterial({
     color: 0x30343a,
     map: asphaltTexture
@@ -1029,9 +1028,8 @@ function toggleGarage() {
 
 garageClose.addEventListener("click", closeGarage);
 garageHelp.addEventListener("click", closeGarage);
-
 /* =========================================================
-   MULTIPLAYER
+   MULTIPLAYER — IMPROVED JOIN AND RECONNECTION HANDLING
    ========================================================= */
 
 const socket = window.io({
@@ -1048,6 +1046,7 @@ let myPlayerId = null;
 let myPlayerName = "Driver";
 let multiplayerJoined = false;
 let requestedStart = false;
+let networkTimer = 0;
 
 const remotePlayers = new Map();
 
@@ -1067,8 +1066,45 @@ function updatePlayerCount() {
     "PLAYERS: " + (remotePlayers.size + (myPlayerId ? 1 : 0));
 }
 
+function removeRemotePlayer(id) {
+  const remote = remotePlayers.get(id);
+  if (!remote) return;
+
+  scene.remove(remote.root);
+
+  remote.root.traverse(object => {
+    if (object.geometry) object.geometry.dispose();
+
+    if (object.material) {
+      const materials = Array.isArray(object.material)
+        ? object.material
+        : [object.material];
+
+      for (const material of materials) {
+        if (material.map) material.map.dispose();
+        material.dispose();
+      }
+    }
+  });
+
+  remotePlayers.delete(id);
+}
+
+function clearRemotePlayers() {
+  for (const id of [...remotePlayers.keys()]) {
+    removeRemotePlayer(id);
+  }
+  updatePlayerCount();
+}
+
 function joinGame() {
-  if (!socket.connected || multiplayerJoined || !requestedStart) return;
+  if (
+    !socket.connected ||
+    multiplayerJoined ||
+    !requestedStart
+  ) return;
+
+  multiplayerJoined = true;
 
   socket.emit("player:join", {
     name: myPlayerName,
@@ -1077,51 +1113,98 @@ function joinGame() {
     vehicleType: selectedVehicleType,
     color: car.userData.paint.color.getHex()
   });
-
-  multiplayerJoined = true;
 }
 
 socket.on("connect", () => {
   updateConnection(true);
-  joinGame();
+
+  // A fresh connection needs a fresh server-side join.
+  myPlayerId = null;
+  multiplayerJoined = false;
+  updatePlayerCount();
+
+  if (requestedStart) {
+    joinGame();
+  }
 });
 
 socket.on("disconnect", () => {
   updateConnection(false);
   multiplayerJoined = false;
   myPlayerId = null;
+  clearRemotePlayers();
+
+  if (started) {
+    started = false;
+    paused = false;
+
+    if (pauseScreen) pauseScreen.classList.add("hidden");
+    if (startScreen) startScreen.classList.remove("hidden");
+
+    showMessage("CONNECTION LOST — RECONNECTING");
+  }
+
   updatePlayerCount();
 });
 
-socket.on("connect_error", () => updateConnection(false));
+socket.on("connect_error", () => {
+  updateConnection(false);
+});
 
 socket.on("player:assigned", data => {
-  if (!data || !data.id) return;
+  /*
+    Accept the common server assignment formats:
+    { id: "..." }
+    { playerId: "..." }
+    { socketId: "..." }
+    or a direct string ID.
 
-  myPlayerId = data.id;
-  myPlayerName = data.name || myPlayerName;
+    socket.id is the fallback for servers that identify
+    players by their Socket.IO connection ID.
+  */
 
-  const gender = data.gender === "female" ? "female" : "male";
+  const assignedId = typeof data === "string"
+    ? data
+    : data?.id || data?.playerId || data?.socketId || socket.id;
 
-  if (gender !== selectedGender) {
-    selectedGender = gender;
-    rebuildLocalCharacter(gender);
-    updateGenderButtons();
+  if (!assignedId) {
+    multiplayerJoined = false;
+    showMessage("SERVER DID NOT ASSIGN A PLAYER ID");
+    return;
+  }
+
+  myPlayerId = assignedId;
+
+  if (data && typeof data === "object") {
+    myPlayerName = data.name || myPlayerName;
+
+    const gender = data.gender === "female" ? "female" : "male";
+
+    if (gender !== selectedGender) {
+      selectedGender = gender;
+      rebuildLocalCharacter(gender);
+
+      if (typeof updateGenderButtons === "function") {
+        updateGenderButtons();
+      }
+    }
   }
 
   localNameTag.userData.setName(myPlayerName);
-  showMessage("WELCOME " + myPlayerName.toUpperCase());
   updatePlayerCount();
 
-  if (requestedStart) startGame();
+  showMessage("WELCOME " + myPlayerName.toUpperCase());
+
+  if (requestedStart && !started) {
+    startGame();
+  }
 });
 
 function addRemotePlayer(data) {
-  if (
-    !data || !data.id ||
-    data.id === myPlayerId ||
-    remotePlayers.has(data.id)
-  ) return;
+  if (!data || typeof data !== "object") return;
+
+  const id = data.id || data.playerId || data.socketId;
+  if (!id || id === myPlayerId || remotePlayers.has(id)) return;
 
   const gender = data.gender === "female" ? "female" : "male";
   const type = VEHICLES[data.vehicleType] ? data.vehicleType : "sport";
@@ -1138,7 +1221,7 @@ function addRemotePlayer(data) {
   scene.add(root);
 
   const remote = {
-    id: data.id,
+    id,
     root,
     avatar,
     vehicle,
@@ -1146,12 +1229,14 @@ function addRemotePlayer(data) {
     gender,
     vehicleType: type,
     targetPosition: new THREE.Vector3(
-      data.x || 0, data.y || 0, data.z || 0
+      Number.isFinite(data.x) ? data.x : 0,
+      Number.isFinite(data.y) ? data.y : 0,
+      Number.isFinite(data.z) ? data.z : 0
     ),
     targetRotation: Number.isFinite(data.rotation) ? data.rotation : 0,
     driving: data.driving === true,
     jumping: data.jumping === true,
-    speed: data.speed || 0
+    speed: Number.isFinite(data.speed) ? data.speed : 0
   };
 
   avatar.visible = !remote.driving;
@@ -1159,25 +1244,38 @@ function addRemotePlayer(data) {
 
   root.position.copy(remote.targetPosition);
   root.rotation.y = remote.targetRotation;
-  remotePlayers.set(data.id, remote);
+
+  remotePlayers.set(id, remote);
 }
 
 socket.on("players:init", players => {
-  if (Array.isArray(players)) players.forEach(addRemotePlayer);
+  if (Array.isArray(players)) {
+    players.forEach(addRemotePlayer);
+  }
   updatePlayerCount();
 });
 
 socket.on("player:joined", data => {
   addRemotePlayer(data);
-  if (data?.name) showMessage(data.name + " JOINED THE CITY");
+
+  if (data?.name) {
+    showMessage(data.name + " JOINED THE CITY");
+  }
+
   updatePlayerCount();
 });
 
 socket.on("player:update", data => {
-  if (!data || !data.id || data.id === myPlayerId) return;
-  if (!remotePlayers.has(data.id)) addRemotePlayer(data);
+  if (!data || typeof data !== "object") return;
 
-  const remote = remotePlayers.get(data.id);
+  const id = data.id || data.playerId || data.socketId;
+  if (!id || id === myPlayerId) return;
+
+  if (!remotePlayers.has(id)) {
+    addRemotePlayer(data);
+  }
+
+  const remote = remotePlayers.get(id);
   if (!remote) return;
 
   if (![data.x, data.y, data.z, data.rotation].every(Number.isFinite)) {
@@ -1193,7 +1291,7 @@ socket.on("player:update", data => {
   remote.targetRotation = data.rotation;
   remote.driving = data.driving === true;
   remote.jumping = data.jumping === true;
-  remote.speed = data.speed || 0;
+  remote.speed = Number.isFinite(data.speed) ? data.speed : 0;
 
   const gender = data.gender === "female" ? "female" : "male";
 
@@ -1222,17 +1320,7 @@ socket.on("player:update", data => {
 });
 
 socket.on("player:left", id => {
-  const remote = remotePlayers.get(id);
-  if (!remote) return;
-
-  scene.remove(remote.root);
-  remote.root.traverse(object => {
-    if (object.isSprite && object.material.map) {
-      object.material.map.dispose();
-    }
-  });
-
-  remotePlayers.delete(id);
+  removeRemotePlayer(id);
   updatePlayerCount();
 });
 
@@ -1251,7 +1339,8 @@ function updateRemotePlayers(dt) {
 
     if (!remote.driving) {
       animateCharacter(
-        remote.avatar, dt,
+        remote.avatar,
+        dt,
         remote.speed > .5 || remote.jumping,
         remote.speed / 10
       );
@@ -1262,8 +1351,6 @@ function updateRemotePlayers(dt) {
     }
   }
 }
-
-let networkTimer = 0;
 
 function sendPlayerUpdate(dt) {
   if (!socket.connected || !multiplayerJoined || !myPlayerId) return;
@@ -1286,7 +1373,7 @@ function sendPlayerUpdate(dt) {
     vehicleType: selectedVehicleType,
     color: car.userData.paint.color.getHex()
   });
-});
+}
 
 /* =========================================================
    CHAT
@@ -1395,6 +1482,7 @@ function closeChat() {
 
 function sendChatMessage() {
   const message = chatInput.value.trim();
+
   if (!message || !socket.connected || !myPlayerId) return;
 
   socket.emit("chat:message", message);
@@ -1409,6 +1497,7 @@ chatInput.addEventListener("keydown", event => {
     event.preventDefault();
     sendChatMessage();
   }
+
   if (event.key === "Escape") {
     event.preventDefault();
     closeChat();
@@ -1536,7 +1625,6 @@ function positionBlocked(x, z, radius, options = {}) {
   return false;
 }
 
-// Axis-by-axis movement allows the player to slide along walls.
 function moveWithCollision(object, dx, dz, radius, options = {}) {
   const oldX = object.position.x;
   const oldZ = object.position.z;
@@ -1559,7 +1647,6 @@ function moveWithCollision(object, dx, dz, radius, options = {}) {
 }
 
 function updateTrafficCollisions() {
-  // Keep traffic from overlapping the player's car.
   for (const t of traffic) {
     const dx = t.mesh.position.x - car.position.x;
     const dz = t.mesh.position.z - car.position.z;
@@ -1619,6 +1706,7 @@ function turnTraffic(t) {
     }
   } else {
     t.road = intersection;
+
     if (oldAxis === "x") {
       t.mesh.position.z =
         roadLane("x", t.road, oldDirection);
@@ -1630,6 +1718,7 @@ function turnTraffic(t) {
 
   orientTrafficVehicle(t);
   setTrafficLane(t);
+
   t.nextIntersection =
     t.road + t.direction * CONFIG.ROAD_SPACING;
 }
@@ -1694,6 +1783,7 @@ function updateTraffic(dt) {
 
       t.road = randomRoadLine();
       setTrafficLane(t);
+
       t.nextIntersection =
         t.road + t.direction * CONFIG.ROAD_SPACING;
     }
@@ -1736,22 +1826,17 @@ function setPedestrianRotation(p) {
 }
 
 function choosePedestrianRoute(p) {
-  // The pedestrian has reached an actual road intersection.
   const intersection = p.progressRoad;
 
   if (Math.random() > .5) {
-    // Turn onto the crossing sidewalk of the next road.
     p.axis = p.axis === "x" ? "z" : "x";
     p.direction = Math.random() > .5 ? 1 : -1;
     p.road = intersection;
     p.side = Math.random() > .5 ? 1 : -1;
   } else {
-    // Continue along the same sidewalk in either direction.
     p.direction *= -1;
   }
 
-  // Put the pedestrian exactly at the intersection before
-  // starting the next straight sidewalk segment.
   if (p.axis === "x") {
     p.mesh.position.x = intersection;
   } else {
@@ -1904,7 +1989,6 @@ function updateCheckpoint() {
     }
   }
 }
-
 /* =========================================================
    INPUT AND MOBILE CONTROLS
    ========================================================= */
@@ -2087,8 +2171,6 @@ function updatePlayer(dt) {
   }
 
   if (jumping) {
-    // While airborne, building collision still applies,
-    // but pedestrians and traffic do not block the jump.
     moveWithCollision(player, dx, dz, PLAYER_RADIUS);
   } else {
     moveWithCollision(player, dx, dz, PLAYER_RADIUS, {
@@ -2152,7 +2234,6 @@ function updateCar(dt) {
     pedestrians: true
   });
 
-  // Reduce speed when the car hits an obstacle.
   if (!moved && Math.abs(carSpeed) > .5) {
     carSpeed *= -.12;
     showMessage("COLLISION");
@@ -2341,6 +2422,7 @@ function makeGenderButton(gender, label) {
 
   button.addEventListener("click", () => {
     if (requestedStart) return;
+
     selectedGender = gender;
     rebuildLocalCharacter(gender);
     updateGenderButtons();
@@ -2462,7 +2544,9 @@ if (startButton) {
 
 if (nameInput) {
   nameInput.addEventListener("keydown", event => {
-    if (event.key === "Enter" && startButton) startButton.click();
+    if (event.key === "Enter" && startButton) {
+      startButton.click();
+    }
   });
 }
 
@@ -2489,9 +2573,10 @@ if (menuButton) {
     started = false;
     requestedStart = false;
     multiplayerJoined = false;
+    myPlayerId = null;
 
     socket.disconnect();
-    myPlayerId = null;
+    clearRemotePlayers();
 
     maleButton.disabled = false;
     femaleButton.disabled = false;
@@ -2500,7 +2585,10 @@ if (menuButton) {
     if (startScreen) startScreen.classList.remove("hidden");
 
     clearControls();
-    setTimeout(() => socket.connect(), 300);
+
+    setTimeout(() => {
+      if (!socket.connected) socket.connect();
+    }, 300);
   });
 }
 

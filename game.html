@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VICE CITY — Online Multiplayer</title>
+  <link rel="stylesheet" href="game.css">
+</head>
+
+<body>
+
+  <div id="game-ui">
+
+    <div class="top-left">
+      <div class="logo">VICE CITY</div>
+      <div class="subtitle">ONLINE MULTIPLAYER</div>
+    </div>
+
+    <div class="top-right">
+      <div id="connection" class="connection offline">
+        CONNECTING...
+      </div>
+      <div id="player-count">PLAYERS: 0</div>
+    </div>
+
+    <div class="bottom-left">
+      <div class="hud-panel">
+        <div class="hud-label">SPEED</div>
+        <div class="speed-number"><span id="speed">0</span> <small>KM/H</small></div>
+      </div>
+
+      <div class="hud-panel">
+        <div class="hud-label">CASH</div>
+        <div class="cash-number" id="cash">$0</div>
+      </div>
+
+      <div class="hud-panel">
+        <div class="hud-label">STATUS</div>
+        <div id="mode">ON FOOT</div>
+      </div>
+    </div>
+
+    <div class="bottom-right">
+      <canvas id="minimap" width="190" height="190"></canvas>
+    </div>
+
+    <div id="mission-panel">
+      <div class="hud-label">CURRENT MISSION</div>
+      <div id="mission">REACH THE NEXT CHECKPOINT</div>
+      <div id="progress">1 / 12</div>
+    </div>
+
+    <div id="message"></div>
+
+  </div>
+
+  <div id="start-screen" class="overlay">
+    <div class="menu-box">
+      <h1>VICE CITY</h1>
+      <p class="menu-subtitle">ONLINE MULTIPLAYER</p>
+
+      <input
+        id="player-name"
+        maxlength="16"
+        placeholder="Enter your player name"
+        autocomplete="off"
+      >
+
+      <button id="start">ENTER CITY</button>
+
+      <div class="instructions">
+        <p>W / S — Accelerate / Reverse</p>
+        <p>A / D — Steering</p>
+        <p>E — Enter / Exit vehicle</p>
+        <p>ESC — Pause</p>
+      </div>
+
+      <div class="menu-footer">
+        CONNECT WITH OTHER PLAYERS ONLINE
+      </div>
+    </div>
+  </div>
+
+  <div id="pause-screen" class="overlay hidden">
+    <div class="menu-box">
+      <h1>PAUSED</h1>
+      <button id="resume-button">RESUME</button>
+      <button id="restart-button">RESTART</button>
+      <button id="menu-button">MAIN MENU</button>
+    </div>
+  </div>
+
+  <div id="mobile-controls">
+    <div class="mobile-direction">
+      <button id="left" class="control-button">◀</button>
+      <button id="right" class="control-button">▶</button>
+    </div>
+
+    <div class="mobile-actions">
+      <button id="brake" class="control-button">BRAKE</button>
+      <button id="accelerate" class="control-button">GAS</button>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script type="module" src="game.js"></script>
+
+</body>
+</html>

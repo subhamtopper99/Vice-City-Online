@@ -1,10 +1,10 @@
 import * as THREE from "https://esm.sh/three@0.160.0";
 
 /* =========================================================
-   VICE CITY — UPDATE 22.1
+   VICE CITY — UPDATE 23
    Complete game.js
    Gender selection, garage, five vehicles, multiplayer,
-   chat, missions, road traffic and sidewalk pedestrians.
+   chat, missions, traffic, pedestrians and collisions.
    ========================================================= */
 
 const CONFIG = {
@@ -20,7 +20,7 @@ const CONFIG = {
 const VEHICLES = {
   sport: {
     name: "911 SPORTS",
-    subtitle: "Porsche 911 Carrera inspired",
+    subtitle: "Sports coupe",
     topSpeed: 294, reverseSpeed: 45,
     acceleration: 8, braking: 14,
     friction: 5.5, steering: 1.65,
@@ -28,7 +28,7 @@ const VEHICLES = {
   },
   supercar: {
     name: "296 SUPERCAR",
-    subtitle: "Ferrari 296 GTB inspired",
+    subtitle: "High-performance supercar",
     topSpeed: 330, reverseSpeed: 52,
     acceleration: 10, braking: 16,
     friction: 5.2, steering: 1.85,
@@ -36,7 +36,7 @@ const VEHICLES = {
   },
   suv: {
     name: "PERFORMANCE SUV",
-    subtitle: "Luxury performance SUV inspired",
+    subtitle: "Luxury performance SUV",
     topSpeed: 250, reverseSpeed: 42,
     acceleration: 6.2, braking: 12,
     friction: 6, steering: 1.28,
@@ -44,7 +44,7 @@ const VEHICLES = {
   },
   sedan: {
     name: "SPORT SEDAN",
-    subtitle: "Performance four-door sedan inspired",
+    subtitle: "Four-door performance sedan",
     topSpeed: 230, reverseSpeed: 40,
     acceleration: 4.8, braking: 11,
     friction: 6, steering: 1.45,
@@ -52,7 +52,7 @@ const VEHICLES = {
   },
   jeep: {
     name: "OFF-ROAD JEEP",
-    subtitle: "Jeep Wrangler inspired",
+    subtitle: "Rugged off-road vehicle",
     topSpeed: 180, reverseSpeed: 35,
     acceleration: 3.8, braking: 9.5,
     friction: 7, steering: 1.12,
@@ -105,12 +105,8 @@ function box(parent, x, y, z, sx, sy, sz, material) {
   return mesh;
 }
 
-function cylinder(parent, x, y, z, radius, height, material, segments = 12) {
-  const geometry = segments === 12
-    ? cylinderGeo
-    : new THREE.CylinderGeometry(1, 1, 1, segments);
-
-  const mesh = new THREE.Mesh(geometry, material);
+function cylinder(parent, x, y, z, radius, height, material) {
+  const mesh = new THREE.Mesh(cylinderGeo, material);
   mesh.position.set(x, y, z);
   mesh.scale.set(radius, height, radius);
   parent.add(mesh);
@@ -118,57 +114,37 @@ function cylinder(parent, x, y, z, radius, height, material, segments = 12) {
 }
 
 /* =========================================================
-   PROCEDURAL TEXTURES
+   PROCEDURAL MATERIALS
    ========================================================= */
 
-function makeTexture(base, type = "noise") {
+function makeTexture(base, type) {
   const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 256;
-
+  canvas.width = canvas.height = 256;
   const ctx = canvas.getContext("2d");
+
   ctx.fillStyle = base;
   ctx.fillRect(0, 0, 256, 256);
 
   if (type === "asphalt") {
-    for (let i = 0; i < 9000; i++) {
+    for (let i = 0; i < 5000; i++) {
       const shade = Math.floor(rand(35, 95));
-      ctx.fillStyle = `rgba(${shade},${shade},${shade},${rand(.08,.3)})`;
-      ctx.fillRect(rand(0,256), rand(0,256), rand(1,3), rand(1,3));
-    }
-
-    for (let i = 0; i < 35; i++) {
-      ctx.strokeStyle = "rgba(10,10,10,.12)";
-      ctx.lineWidth = rand(.4, 1.5);
-      ctx.beginPath();
-      ctx.moveTo(rand(0,256), rand(0,256));
-      ctx.lineTo(rand(0,256), rand(0,256));
-      ctx.stroke();
+      ctx.fillStyle =
+        `rgba(${shade},${shade},${shade},${rand(.08,.25)})`;
+      ctx.fillRect(rand(0, 256), rand(0, 256), 2, 2);
     }
   }
 
   if (type === "concrete") {
-    for (let i = 0; i < 2500; i++) {
+    for (let i = 0; i < 1800; i++) {
       ctx.fillStyle = `rgba(50,50,50,${rand(.025,.12)})`;
-      ctx.fillRect(rand(0,256), rand(0,256), rand(1,5), rand(1,5));
-    }
-
-    ctx.strokeStyle = "rgba(40,40,40,.12)";
-    ctx.lineWidth = 2;
-
-    for (let p = 0; p <= 256; p += 64) {
-      ctx.beginPath();
-      ctx.moveTo(p, 0);
-      ctx.lineTo(p, 256);
-      ctx.stroke();
+      ctx.fillRect(rand(0, 256), rand(0, 256), 3, 3);
     }
   }
 
   if (type === "grass") {
-    for (let i = 0; i < 5000; i++) {
-      ctx.fillStyle =
-        `rgba(${rand(10,80)},${rand(65,130)},${rand(10,45)},.22)`;
-      ctx.fillRect(rand(0,256), rand(0,256), 2, 2);
+    for (let i = 0; i < 2500; i++) {
+      ctx.fillStyle = `rgba(20,90,25,.2)`;
+      ctx.fillRect(rand(0, 256), rand(0, 256), 2, 2);
     }
   }
 
@@ -179,16 +155,14 @@ function makeTexture(base, type = "noise") {
           ? "rgba(105,165,190,.65)"
           : "rgba(35,45,55,.65)";
         ctx.fillRect(x, y, 25, 19);
-
-        ctx.strokeStyle = "rgba(20,25,30,.45)";
+        ctx.strokeStyle = "rgba(20,25,30,.5)";
         ctx.strokeRect(x, y, 25, 19);
       }
     }
   }
 
   const texture = new THREE.CanvasTexture(canvas);
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = 2;
   return texture;
@@ -207,7 +181,11 @@ const buildingTexture = makeTexture("#a6a092", "building");
 buildingTexture.repeat.set(1, 2);
 
 const mat = {
-  road: new THREE.MeshLambertMaterial({ map: asphaltTexture }),
+  // Fixed dark road colour prevents white roads if a texture fails.
+  road: new THREE.MeshLambertMaterial({
+    color: 0x30343a,
+    map: asphaltTexture
+  }),
   sidewalk: new THREE.MeshLambertMaterial({ map: pavementTexture }),
   grass: new THREE.MeshLambertMaterial({ map: grassTexture }),
   concrete: new THREE.MeshLambertMaterial({ color: 0xb5b3ad }),
@@ -225,10 +203,6 @@ const buildingMaterials = [
   map: buildingTexture
 }));
 
-/* =========================================================
-   LIGHTING
-   ========================================================= */
-
 scene.add(new THREE.HemisphereLight(0xcceaff, 0x596044, 2));
 
 const sun = new THREE.DirectionalLight(0xffedcf, 1.4);
@@ -236,10 +210,11 @@ sun.position.set(-250, 500, 200);
 scene.add(sun);
 
 /* =========================================================
-   ROAD GRID AND CITY
+   CITY AND ROADS
    ========================================================= */
 
 const roadLines = [];
+const buildings = [];
 
 function createRoads() {
   const L = CONFIG.CITY_LIMIT;
@@ -266,7 +241,6 @@ function createRoads() {
 
     box(world, p - .18, -.475, 0, .10, .025, L * 2, mat.yellow);
     box(world, p + .18, -.475, 0, .10, .025, L * 2, mat.yellow);
-
     box(world, 0, -.475, p - .18, L * 2, .025, .10, mat.yellow);
     box(world, 0, -.475, p + .18, L * 2, .025, .10, mat.yellow);
   }
@@ -291,7 +265,6 @@ function createPark(x, z) {
   for (let i = 0; i < 8; i++) {
     const tx = x + rand(-48, 48);
     const tz = z + rand(-48, 48);
-
     cylinder(world, tx, 4, tz, 1.2, 8, mat.trunk);
 
     const crown = new THREE.Mesh(sphereGeo, mat.tree);
@@ -300,8 +273,6 @@ function createPark(x, z) {
     world.add(crown);
   }
 }
-
-const buildings = [];
 
 function createBuilding(x, z, w, d, h, material) {
   box(world, x, h / 2 - .25, z, w, h, d, material);
@@ -365,7 +336,6 @@ function createWindows() {
           5 + r * 12,
           b.z + b.depth / 2 + .12
         );
-
         dummy.scale.set(3.5, 4.5, .15);
         dummy.updateMatrix();
         inst.setMatrixAt(index++, dummy.matrix);
@@ -420,7 +390,6 @@ function createPalms() {
   for (let i = 0; i < 55; i++) {
     const x = rand(-900, 900);
     const z = rand(-900, 900);
-
     cylinder(world, x, 4, z, .65, 8, mat.trunk);
 
     const crown = new THREE.Mesh(sphereGeo, mat.tree);
@@ -448,10 +417,8 @@ function createCharacter(color = STREET_BLUE, gender = "male") {
   const shoeMat = new THREE.MeshLambertMaterial({ color: 0x17191d });
 
   const torso = new THREE.Mesh(
-    new THREE.CapsuleGeometry(.31, .48, 4, 8),
-    shirt
+    new THREE.CapsuleGeometry(.31, .48, 4, 8), shirt
   );
-
   torso.position.y = 1.42;
   torso.scale.set(female ? .88 : 1, 1, .72);
   root.add(torso);
@@ -579,7 +546,6 @@ function animateCharacter(c, dt, moving, speed = 1) {
     : d.walkTime * .82;
 
   const swing = moving ? Math.sin(d.walkTime) * .65 : 0;
-
   d.arms[0].rotation.x = swing;
   d.arms[1].rotation.x = -swing;
   d.legs[0].rotation.x = -swing;
@@ -590,7 +556,6 @@ function createNameTag(name) {
   const canvas = document.createElement("canvas");
   canvas.width = 512;
   canvas.height = 128;
-
   const ctx = canvas.getContext("2d");
 
   function draw(value) {
@@ -636,7 +601,7 @@ function createNameTag(name) {
 }
 
 /* =========================================================
-   VEHICLE MODELS
+   VEHICLES — FIVE DISTINCT STYLES
    ========================================================= */
 
 function createCar(color = 0xe33b2e, style = "sport") {
@@ -647,7 +612,7 @@ function createCar(color = 0xe33b2e, style = "sport") {
     color, roughness: .3, metalness: .35
   });
 
-  const darkPaint = new THREE.MeshStandardMaterial({
+  const dark = new THREE.MeshStandardMaterial({
     color: 0x171c22, roughness: .45, metalness: .15
   });
 
@@ -665,22 +630,16 @@ function createCar(color = 0xe33b2e, style = "sport") {
 
   const lamp = new THREE.MeshBasicMaterial({ color: 0xfff1cf });
   const redLamp = new THREE.MeshBasicMaterial({ color: 0xf22b20 });
-  const grille = new THREE.MeshStandardMaterial({ color: 0x0d1115 });
-
   const wheels = [];
 
-  function part(x, y, z, sx, sy, sz, material, rz = 0) {
-    const m = box(car, x, y, z, sx, sy, sz, material);
-    m.rotation.z = rz;
-    return m;
+  function part(x, y, z, sx, sy, sz, material) {
+    return box(car, x, y, z, sx, sy, sz, material);
   }
 
   function addWheel(x, z, radius = .43, width = .28) {
     const tire = new THREE.Mesh(
-      new THREE.CylinderGeometry(radius, radius, width, 18),
-      rubber
+      new THREE.CylinderGeometry(radius, radius, width, 18), rubber
     );
-
     tire.rotation.z = Math.PI / 2;
     tire.position.set(x, radius + .08, z);
     car.add(tire);
@@ -689,33 +648,19 @@ function createCar(color = 0xe33b2e, style = "sport") {
       new THREE.CylinderGeometry(radius * .62, radius * .62, width * 1.04, 14),
       alloy
     );
-
     rim.rotation.z = Math.PI / 2;
     rim.position.copy(tire.position);
     car.add(rim);
 
     const hub = new THREE.Mesh(
       new THREE.CylinderGeometry(radius * .17, radius * .17, width * 1.08, 12),
-      darkPaint
+      dark
     );
-
     hub.rotation.z = Math.PI / 2;
     hub.position.copy(tire.position);
     car.add(hub);
 
     wheels.push(tire, rim, hub);
-  }
-
-  function headlights(width = .42, y = 1.05, z = 2.05) {
-    for (const s of [-1, 1]) {
-      part(s * .78, y, z, width, .14, .09, lamp);
-    }
-  }
-
-  function tailLights(width = .48, y = 1.02, z = -2.05) {
-    for (const s of [-1, 1]) {
-      part(s * .82, y, z, width, .15, .09, redLamp);
-    }
   }
 
   if (style === "sport") {
@@ -724,17 +669,12 @@ function createCar(color = 0xe33b2e, style = "sport") {
     part(0, 1, -1.55, 2.32, .28, 1.18, paint);
     part(0, 1.65, -.12, 1.75, .65, 1.8, glass);
     part(0, 2, -.12, 1.8, .12, 1.9, paint);
-
     for (const s of [-1, 1]) {
       part(s * .91, 1.42, -.12, .1, .45, 1.8, paint);
-      part(s * 1.18, .62, 0, .12, .16, 3.15, darkPaint);
       part(s * .78, 1.06, 2.15, .45, .13, .08, lamp);
       part(s * .82, 1.04, -2.13, .5, .14, .08, redLamp);
     }
-
-    part(0, .63, 2.3, 2.3, .12, .2, darkPaint);
-    part(0, 1.12, -2.23, 1.75, .055, .045, redLamp);
-
+    part(0, .63, 2.3, 2.3, .12, .2, dark);
     for (const x of [-1.2, 1.2]) {
       for (const z of [-1.45, 1.45]) addWheel(x, z, .46, .3);
     }
@@ -744,17 +684,12 @@ function createCar(color = 0xe33b2e, style = "sport") {
     part(0, .78, -1.62, 2.3, .34, 1.25, paint);
     part(0, 1.46, -.12, 1.65, .5, 1.65, glass);
     part(0, 1.74, -.12, 1.7, .1, 1.7, paint);
-
     for (const s of [-1, 1]) {
-      part(s * 1.15, .86, -.62, .13, .43, .72, darkPaint);
-      part(s * 1.19, .88, -.62, .045, .22, .48, grille);
+      part(s * 1.15, .86, -.62, .13, .43, .72, dark);
       part(s * .78, .96, 2.18, .62, .1, .1, lamp);
       part(s * .9, 1.02, -2.17, .24, .12, .07, redLamp);
     }
-
-    part(0, .55, -2.24, 2.25, .2, .24, darkPaint);
-    part(0, .62, 2.3, 2.3, .1, .24, darkPaint);
-
+    part(0, .55, -2.24, 2.25, .2, .24, dark);
     for (const x of [-1.18, 1.18]) {
       for (const z of [-1.5, 1.48]) addWheel(x, z, .43, .29);
     }
@@ -764,24 +699,13 @@ function createCar(color = 0xe33b2e, style = "sport") {
     part(0, 1.16, -1.68, 2.6, .42, 1.1, paint);
     part(0, 2.03, -.12, 2.1, 1.25, 2.65, glass);
     part(0, 2.7, -.12, 2.16, .16, 2.72, paint);
-
     for (const s of [-1, 1]) {
       part(s * 1.08, 2.02, -.12, .13, 1, 2.65, paint);
       part(s * 1.13, 1.95, .72, .055, .7, .95, glass);
       part(s * 1.13, 1.95, -.55, .055, .7, .9, glass);
-      part(s * 1.28, .94, 1.2, .12, .62, 1.1, darkPaint);
-      part(s * 1.28, .94, -1.25, .12, .62, 1.1, darkPaint);
       part(s * .91, 1.5, 2.35, .48, .2, .09, lamp);
     }
-
-    part(0, 1.12, 2.42, 1.45, .5, .06, grille);
-    part(0, .82, 2.4, 2.48, .13, .18, darkPaint);
-    tailLights(.58, 1.42, -2.4);
-
-    for (const s of [-1, 1]) {
-      part(s * .88, 2.82, -.1, .08, .09, 2.2, alloy);
-    }
-
+    part(0, 1.12, 2.42, 1.45, .5, .06, dark);
     for (const x of [-1.35, 1.35]) {
       for (const z of [-1.52, 1.5]) addWheel(x, z, .53, .34);
     }
@@ -791,18 +715,16 @@ function createCar(color = 0xe33b2e, style = "sport") {
     part(0, 1.06, -1.68, 2.4, .3, 1.18, paint);
     part(0, 1.72, -.18, 1.9, .95, 2.45, glass);
     part(0, 2.23, -.18, 1.95, .13, 2.5, paint);
-
     for (const s of [-1, 1]) {
       part(s * .98, 1.7, -.18, .08, .82, 2.45, paint);
       part(s * 1.02, 1.74, .57, .04, .62, .82, glass);
       part(s * 1.02, 1.74, -.48, .04, .62, .82, glass);
-      part(s * 1.18, .61, 0, .12, .16, 3.3, darkPaint);
     }
-
-    part(0, .76, 2.43, 2.48, .23, .2, darkPaint);
-    headlights(.48, 1.12, 2.23);
-    tailLights(.55, 1.08, -2.3);
-
+    part(0, .76, 2.43, 2.48, .23, .2, dark);
+    for (const s of [-1, 1]) {
+      part(s * .78, 1.12, 2.23, .48, .14, .09, lamp);
+      part(s * .82, 1.08, -2.3, .55, .15, .09, redLamp);
+    }
     for (const x of [-1.23, 1.23]) {
       for (const z of [-1.55, 1.52]) addWheel(x, z, .43, .29);
     }
@@ -811,22 +733,12 @@ function createCar(color = 0xe33b2e, style = "sport") {
     part(0, 1.22, 1.35, 2.52, .55, 1.25, paint);
     part(0, 1.18, -1.55, 2.5, .5, 1.1, paint);
     part(0, 2.05, -.18, 2.1, 1.25, 2.55, paint);
-    part(0, 2.73, -.18, 2.25, .2, 2.9, darkPaint);
-    part(0, 2.12, 1.1, 1.95, .83, .1, glass, -.06);
-
+    part(0, 2.73, -.18, 2.25, .2, 2.9, dark);
+    part(0, 2.12, 1.1, 1.95, .83, .1, glass);
     for (const s of [-1, 1]) {
-      part(s * 1.08, 2.04, -.2, .12, 1.1, 2.55, darkPaint);
+      part(s * 1.08, 2.04, -.2, .12, 1.1, 2.55, dark);
       part(s * 1.12, 1.96, -.5, .06, .7, .9, glass);
       part(s * 1.12, 1.96, .55, .06, .7, .9, glass);
-    }
-
-    part(0, 1.38, 2.23, 1.05, .48, .07, darkPaint);
-
-    for (let i = -3; i <= 3; i++) {
-      part(i * .14, 1.38, 2.28, .055, .37, .025, alloy);
-    }
-
-    for (const s of [-1, 1]) {
       const head = new THREE.Mesh(
         new THREE.CylinderGeometry(.2, .2, .09, 16), lamp
       );
@@ -834,22 +746,15 @@ function createCar(color = 0xe33b2e, style = "sport") {
       head.position.set(s * .85, 1.42, 2.26);
       car.add(head);
     }
-
+    part(0, 1.38, 2.23, 1.05, .48, .07, dark);
+    for (let i = -3; i <= 3; i++) {
+      part(i * .14, 1.38, 2.28, .055, .37, .025, alloy);
+    }
     const spare = new THREE.Mesh(
       new THREE.TorusGeometry(.39, .13, 8, 16), rubber
     );
     spare.position.set(0, 1.45, -2.25);
     car.add(spare);
-
-    const spareHub = new THREE.Mesh(
-      new THREE.CylinderGeometry(.2, .2, .12, 12), alloy
-    );
-    spareHub.rotation.x = Math.PI / 2;
-    spareHub.position.set(0, 1.45, -2.3);
-    car.add(spareHub);
-
-    part(0, .78, 2.32, 2.65, .2, .28, darkPaint);
-
     for (const x of [-1.3, 1.3]) {
       for (const z of [-1.38, 1.42]) addWheel(x, z, .55, .38);
     }
@@ -860,12 +765,11 @@ function createCar(color = 0xe33b2e, style = "sport") {
   car.userData.style = style;
   car.userData.spec = spec;
   car.userData.vehicleName = spec.name;
-
   return car;
 }
 
 /* =========================================================
-   LOCAL PLAYER AND VEHICLE
+   LOCAL PLAYER
    ========================================================= */
 
 const player = createCharacter(STREET_BLUE, selectedGender);
@@ -881,7 +785,6 @@ function rebuildLocalCharacter(gender) {
   const replacement = createCharacter(STREET_BLUE, gender);
 
   player.clear();
-
   while (replacement.children.length) {
     player.add(replacement.children[0]);
   }
@@ -909,7 +812,6 @@ let messageTimer = 0;
 
 const JUMP_FORCE = 9.5;
 const GRAVITY = 24;
-
 let verticalVelocity = 0;
 let jumping = false;
 
@@ -961,7 +863,7 @@ function updateJump(dt) {
 }
 
 /* =========================================================
-   GARAGE MENU
+   GARAGE
    ========================================================= */
 
 const garageStyle = document.createElement("style");
@@ -1048,11 +950,11 @@ function spawnVehicle(type) {
   const oldRotation = playerRotation;
 
   scene.remove(car);
-
   selectedVehicleType = type;
-  const spec = VEHICLES[type];
 
+  const spec = VEHICLES[type];
   car = createCar(spec.color, type);
+
   car.position.set(
     oldPosition.x + Math.sin(oldRotation) * 5,
     0,
@@ -1109,7 +1011,6 @@ function refreshGarageCards() {
 
 function openGarage() {
   if (!started || paused || driving || chatOpen) return;
-
   garageOpen = true;
   garagePanel.classList.remove("hidden");
   refreshGarageCards();
@@ -1274,7 +1175,6 @@ socket.on("player:joined", data => {
 
 socket.on("player:update", data => {
   if (!data || !data.id || data.id === myPlayerId) return;
-
   if (!remotePlayers.has(data.id)) addRemotePlayer(data);
 
   const remote = remotePlayers.get(data.id);
@@ -1309,12 +1209,10 @@ socket.on("player:update", data => {
     data.vehicleType !== remote.vehicleType
   ) {
     remote.root.remove(remote.vehicle);
-
     remote.vehicle = createCar(
       Number.isFinite(data.color) ? data.color : 0x2874bb,
       data.vehicleType
     );
-
     remote.root.add(remote.vehicle);
     remote.vehicleType = data.vehicleType;
   }
@@ -1328,7 +1226,6 @@ socket.on("player:left", id => {
   if (!remote) return;
 
   scene.remove(remote.root);
-
   remote.root.traverse(object => {
     if (object.isSprite && object.material.map) {
       object.material.map.dispose();
@@ -1389,7 +1286,7 @@ function sendPlayerUpdate(dt) {
     vehicleType: selectedVehicleType,
     color: car.userData.paint.color.getHex()
   });
-}
+});
 
 /* =========================================================
    CHAT
@@ -1421,7 +1318,6 @@ chatStyle.textContent = `
 .vice-chat-name{color:#ffd65b;font-weight:bold}
 .vice-chat-system{color:#8fd7ff;font-style:italic}
 `;
-
 document.head.appendChild(chatStyle);
 
 const chatPanel = document.createElement("div");
@@ -1499,7 +1395,6 @@ function closeChat() {
 
 function sendChatMessage() {
   const message = chatInput.value.trim();
-
   if (!message || !socket.connected || !myPlayerId) return;
 
   socket.emit("chat:message", message);
@@ -1514,7 +1409,6 @@ chatInput.addEventListener("keydown", event => {
     event.preventDefault();
     sendChatMessage();
   }
-
   if (event.key === "Escape") {
     event.preventDefault();
     closeChat();
@@ -1533,12 +1427,13 @@ socket.on("chat:message", data => {
 addChatLine("VICE CITY", "Welcome! Press ENTER to chat.", true);
 
 /* =========================================================
-   ROAD NETWORK HELPERS
+   ROAD HELPERS
    ========================================================= */
 
 const ROAD_HALF = CONFIG.ROAD_WIDTH / 2;
 const TRAFFIC_LANE_OFFSET = 4.5;
-const SIDEWALK_OFFSET = ROAD_HALF + CONFIG.SIDEWALK_WIDTH / 2 + 1.5;
+const SIDEWALK_OFFSET =
+  ROAD_HALF + CONFIG.SIDEWALK_WIDTH / 2 + 1.5;
 
 function nearestRoadLine(value) {
   return clamp(
@@ -1554,14 +1449,130 @@ function randomRoadLine() {
 
 function roadLane(axis, road, direction) {
   if (axis === "x") {
-    return road + (direction > 0 ? -TRAFFIC_LANE_OFFSET : TRAFFIC_LANE_OFFSET);
+    return road + (direction > 0
+      ? -TRAFFIC_LANE_OFFSET
+      : TRAFFIC_LANE_OFFSET);
   }
 
-  return road + (direction > 0 ? TRAFFIC_LANE_OFFSET : -TRAFFIC_LANE_OFFSET);
+  return road + (direction > 0
+    ? TRAFFIC_LANE_OFFSET
+    : -TRAFFIC_LANE_OFFSET);
 }
 
 /* =========================================================
-   TRAFFIC — ROAD LANES AND INTERSECTION TURNS
+   COLLISION SYSTEM
+   ========================================================= */
+
+const PLAYER_RADIUS = .65;
+const CAR_RADIUS = 2.25;
+const TRAFFIC_RADIUS = 2.0;
+const PEDESTRIAN_RADIUS = .55;
+
+function circleHitsBuilding(x, z, radius) {
+  for (const b of buildings) {
+    const closestX = clamp(
+      x, b.x - b.width / 2, b.x + b.width / 2
+    );
+
+    const closestZ = clamp(
+      z, b.z - b.depth / 2, b.z + b.depth / 2
+    );
+
+    const dx = x - closestX;
+    const dz = z - closestZ;
+
+    if (dx * dx + dz * dz < radius * radius) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function circleHitsTraffic(x, z, radius) {
+  for (const t of traffic) {
+    const dx = x - t.mesh.position.x;
+    const dz = z - t.mesh.position.z;
+    const minimum = radius + TRAFFIC_RADIUS;
+
+    if (dx * dx + dz * dz < minimum * minimum) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function circleHitsPedestrians(x, z, radius) {
+  for (const p of pedestrians) {
+    const dx = x - p.mesh.position.x;
+    const dz = z - p.mesh.position.z;
+    const minimum = radius + PEDESTRIAN_RADIUS;
+
+    if (dx * dx + dz * dz < minimum * minimum) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function positionBlocked(x, z, radius, options = {}) {
+  if (
+    Math.abs(x) > CONFIG.CITY_LIMIT - radius ||
+    Math.abs(z) > CONFIG.CITY_LIMIT - radius
+  ) return true;
+
+  if (circleHitsBuilding(x, z, radius)) return true;
+
+  if (options.traffic && circleHitsTraffic(x, z, radius)) {
+    return true;
+  }
+
+  if (options.pedestrians && circleHitsPedestrians(x, z, radius)) {
+    return true;
+  }
+
+  return false;
+}
+
+// Axis-by-axis movement allows the player to slide along walls.
+function moveWithCollision(object, dx, dz, radius, options = {}) {
+  const oldX = object.position.x;
+  const oldZ = object.position.z;
+
+  const nextX = oldX + dx;
+  const nextZ = oldZ + dz;
+
+  if (!positionBlocked(nextX, oldZ, radius, options)) {
+    object.position.x = nextX;
+  }
+
+  if (!positionBlocked(object.position.x, nextZ, radius, options)) {
+    object.position.z = nextZ;
+  }
+
+  return (
+    Math.abs(object.position.x - oldX) > .0001 ||
+    Math.abs(object.position.z - oldZ) > .0001
+  );
+}
+
+function updateTrafficCollisions() {
+  // Keep traffic from overlapping the player's car.
+  for (const t of traffic) {
+    const dx = t.mesh.position.x - car.position.x;
+    const dz = t.mesh.position.z - car.position.z;
+    const distanceSq = dx * dx + dz * dz;
+
+    if (driving && distanceSq < 30) {
+      t.speed = Math.max(0, t.speed - .15);
+    }
+  }
+}
+
+/* =========================================================
+   TRAFFIC
    ========================================================= */
 
 const traffic = [];
@@ -1572,7 +1583,8 @@ const TRAFFIC_MAX_SPEED = 23;
 
 function orientTrafficVehicle(t) {
   if (t.axis === "x") {
-    t.mesh.rotation.y = t.direction > 0 ? Math.PI / 2 : -Math.PI / 2;
+    t.mesh.rotation.y =
+      t.direction > 0 ? Math.PI / 2 : -Math.PI / 2;
   } else {
     t.mesh.rotation.y = t.direction > 0 ? 0 : Math.PI;
   }
@@ -1596,22 +1608,30 @@ function turnTraffic(t) {
     t.direction = Math.random() > .5 ? 1 : -1;
     t.road = intersection;
 
-    t.mesh.position.x = oldAxis === "x"
-      ? intersection
-      : roadLane("z", intersection, t.direction);
-
-    t.mesh.position.z = oldAxis === "z"
-      ? intersection
-      : roadLane("x", intersection, t.direction);
+    if (t.axis === "x") {
+      t.mesh.position.x = intersection;
+      t.mesh.position.z =
+        roadLane("x", t.road, t.direction);
+    } else {
+      t.mesh.position.z = intersection;
+      t.mesh.position.x =
+        roadLane("z", t.road, t.direction);
+    }
   } else {
     t.road = intersection;
-    t.mesh.position[oldAxis === "x" ? "z" : "x"] =
-      roadLane(oldAxis, t.road, oldDirection);
+    if (oldAxis === "x") {
+      t.mesh.position.z =
+        roadLane("x", t.road, oldDirection);
+    } else {
+      t.mesh.position.x =
+        roadLane("z", t.road, oldDirection);
+    }
   }
 
   orientTrafficVehicle(t);
   setTrafficLane(t);
-  t.nextIntersection = t.road + t.direction * CONFIG.ROAD_SPACING;
+  t.nextIntersection =
+    t.road + t.direction * CONFIG.ROAD_SPACING;
 }
 
 function createTraffic() {
@@ -1636,14 +1656,12 @@ function createTraffic() {
 
     if (axis === "x") {
       vehicle.position.set(
-        rand(-850, 850),
-        0,
+        rand(-850, 850), 0,
         roadLane(axis, road, direction)
       );
     } else {
       vehicle.position.set(
-        roadLane(axis, road, direction),
-        0,
+        roadLane(axis, road, direction), 0,
         rand(-850, 850)
       );
     }
@@ -1671,10 +1689,13 @@ function updateTraffic(dt) {
       Math.abs(t.mesh.position.x) > CONFIG.CITY_LIMIT - 20 ||
       Math.abs(t.mesh.position.z) > CONFIG.CITY_LIMIT - 20
     ) {
-      t.mesh.position[t.axis] = -t.direction * (CONFIG.CITY_LIMIT - 30);
+      t.mesh.position[t.axis] =
+        -t.direction * (CONFIG.CITY_LIMIT - 30);
+
       t.road = randomRoadLine();
       setTrafficLane(t);
-      t.nextIntersection = t.road + t.direction * CONFIG.ROAD_SPACING;
+      t.nextIntersection =
+        t.road + t.direction * CONFIG.ROAD_SPACING;
     }
 
     t.mesh.userData.wheels.forEach(wheel => {
@@ -1684,7 +1705,7 @@ function updateTraffic(dt) {
 }
 
 /* =========================================================
-   PEDESTRIANS — SIDEWALK PATHS
+   PEDESTRIANS — GRID-ALIGNED SIDEWALK ROUTES
    ========================================================= */
 
 const pedestrians = [];
@@ -1698,30 +1719,51 @@ function sidewalkCoordinate(axis, road, side) {
   return road + side * SIDEWALK_OFFSET;
 }
 
-function choosePedestrianRoute(p) {
-  if (Math.random() > .5) {
-    p.axis = p.axis === "x" ? "z" : "x";
-    p.direction = Math.random() > .5 ? 1 : -1;
-    p.road = nearestRoadLine(
-      p.axis === "x" ? p.mesh.position.z : p.mesh.position.x
-    );
+function setPedestrianPathPosition(p) {
+  if (p.axis === "x") {
+    p.mesh.position.z =
+      sidewalkCoordinate("x", p.road, p.side);
   } else {
-    p.direction *= -1;
+    p.mesh.position.x =
+      sidewalkCoordinate("z", p.road, p.side);
   }
+}
 
-  p.nextIntersection = p.progressRoad + p.direction * CONFIG.ROAD_SPACING;
-
+function setPedestrianRotation(p) {
   p.mesh.rotation.y = p.axis === "x"
     ? (p.direction > 0 ? Math.PI / 2 : -Math.PI / 2)
     : (p.direction > 0 ? 0 : Math.PI);
 }
 
-function setPedestrianPathPosition(p) {
-  if (p.axis === "x") {
-    p.mesh.position.z = sidewalkCoordinate("x", p.road, p.side);
+function choosePedestrianRoute(p) {
+  // The pedestrian has reached an actual road intersection.
+  const intersection = p.progressRoad;
+
+  if (Math.random() > .5) {
+    // Turn onto the crossing sidewalk of the next road.
+    p.axis = p.axis === "x" ? "z" : "x";
+    p.direction = Math.random() > .5 ? 1 : -1;
+    p.road = intersection;
+    p.side = Math.random() > .5 ? 1 : -1;
   } else {
-    p.mesh.position.x = sidewalkCoordinate("z", p.road, p.side);
+    // Continue along the same sidewalk in either direction.
+    p.direction *= -1;
   }
+
+  // Put the pedestrian exactly at the intersection before
+  // starting the next straight sidewalk segment.
+  if (p.axis === "x") {
+    p.mesh.position.x = intersection;
+  } else {
+    p.mesh.position.z = intersection;
+  }
+
+  setPedestrianPathPosition(p);
+
+  p.nextIntersection =
+    intersection + p.direction * CONFIG.ROAD_SPACING;
+
+  setPedestrianRotation(p);
 }
 
 function createPedestrian() {
@@ -1732,7 +1774,14 @@ function createPedestrian() {
   const road = randomRoadLine();
   const direction = Math.random() > .5 ? 1 : -1;
   const side = Math.random() > .5 ? 1 : -1;
+
   const progress = rand(-800, 800);
+  const lowerGrid = Math.floor(progress / CONFIG.ROAD_SPACING) *
+    CONFIG.ROAD_SPACING;
+
+  const nextIntersection = direction > 0
+    ? lowerGrid + CONFIG.ROAD_SPACING
+    : lowerGrid;
 
   const p = {
     mesh: person,
@@ -1742,34 +1791,22 @@ function createPedestrian() {
     side,
     speed: rand(1.1, 2.0),
     progressRoad: progress,
-    nextIntersection: 0
+    nextIntersection
   };
-
-  p.nextIntersection =
-    (Math.floor(progress / CONFIG.ROAD_SPACING) * CONFIG.ROAD_SPACING) +
-    (direction > 0 ? CONFIG.ROAD_SPACING : 0);
-
-  // Keep the initial pedestrian on a sidewalk and align the
-  // route progress with the pedestrian's actual position.
-  p.progressRoad = progress;
-  p.nextIntersection = progress + direction * CONFIG.ROAD_SPACING;
 
   if (axis === "x") {
     person.position.set(
-      progress,
-      0,
+      progress, 0,
       sidewalkCoordinate(axis, road, side)
     );
-    person.rotation.y = direction > 0 ? Math.PI / 2 : -Math.PI / 2;
   } else {
     person.position.set(
-      sidewalkCoordinate(axis, road, side),
-      0,
+      sidewalkCoordinate(axis, road, side), 0,
       progress
     );
-    person.rotation.y = direction > 0 ? 0 : Math.PI;
   }
 
+  setPedestrianRotation(p);
   scene.add(person);
   pedestrians.push(p);
 }
@@ -1787,9 +1824,7 @@ function updatePedestrians(dt) {
     if (reached) {
       p.progressRoad = p.nextIntersection;
       p.mesh.position[p.axis] = p.progressRoad;
-
       choosePedestrianRoute(p);
-      setPedestrianPathPosition(p);
     }
 
     if (Math.abs(p.mesh.position[p.axis]) > 870) {
@@ -1797,10 +1832,7 @@ function updatePedestrians(dt) {
       p.progressRoad = p.mesh.position[p.axis];
       p.nextIntersection =
         p.progressRoad + p.direction * CONFIG.ROAD_SPACING;
-
-      p.mesh.rotation.y = p.axis === "x"
-        ? (p.direction > 0 ? Math.PI / 2 : -Math.PI / 2)
-        : (p.direction > 0 ? 0 : Math.PI);
+      setPedestrianRotation(p);
     }
 
     animateCharacter(p.mesh, dt, true, 1);
@@ -1991,22 +2023,27 @@ function toggleVehicle() {
       showMessage("MOVE CLOSER TO YOUR CAR");
     }
   } else {
+    const exitX = car.position.x + Math.sin(carRotation) * 4;
+    const exitZ = car.position.z + Math.cos(carRotation) * 4;
+
+    if (positionBlocked(exitX, exitZ, PLAYER_RADIUS, {
+      traffic: true,
+      pedestrians: true
+    })) {
+      showMessage("NOT ENOUGH ROOM TO EXIT");
+      return;
+    }
+
     driving = false;
     player.visible = true;
-
-    player.position.set(
-      car.position.x + Math.sin(carRotation) * 4,
-      0,
-      car.position.z + Math.cos(carRotation) * 4
-    );
-
+    player.position.set(exitX, 0, exitZ);
     playerRotation = carRotation;
     showMessage("VEHICLE EXITED");
   }
 }
 
 /* =========================================================
-   MOVEMENT
+   MOVEMENT WITH COLLISIONS
    ========================================================= */
 
 function updatePlayer(dt) {
@@ -2024,6 +2061,7 @@ function updatePlayer(dt) {
   const right =
     pressed("d", "arrowright") || controls.right;
 
+  // A turns left and D turns right.
   const steeringInput = (left ? 1 : 0) - (right ? 1 : 0);
 
   if (forward || backward) {
@@ -2035,15 +2073,31 @@ function updatePlayer(dt) {
   );
 
   const speed = forward ? 15 : backward ? 10 : 0;
+  let dx = 0;
+  let dz = 0;
 
-  if (forward) player.position.addScaledVector(direction, speed * dt);
-  if (backward) player.position.addScaledVector(direction, -speed * dt);
+  if (forward) {
+    dx += direction.x * speed * dt;
+    dz += direction.z * speed * dt;
+  }
+
+  if (backward) {
+    dx -= direction.x * speed * dt;
+    dz -= direction.z * speed * dt;
+  }
+
+  if (jumping) {
+    // While airborne, building collision still applies,
+    // but pedestrians and traffic do not block the jump.
+    moveWithCollision(player, dx, dz, PLAYER_RADIUS);
+  } else {
+    moveWithCollision(player, dx, dz, PLAYER_RADIUS, {
+      traffic: true,
+      pedestrians: true
+    });
+  }
 
   player.rotation.y = playerRotation;
-
-  player.position.x = clamp(player.position.x, -900, 900);
-  player.position.z = clamp(player.position.z, -900, 900);
-
   animateCharacter(player, dt, forward || backward, speed / 5);
 }
 
@@ -2054,7 +2108,6 @@ function updateCar(dt) {
   }
 
   const spec = car.userData.spec;
-
   const maxSpeed = spec.topSpeed / 3.6;
   const reverseSpeed = spec.reverseSpeed / 3.6;
 
@@ -2070,6 +2123,7 @@ function updateCar(dt) {
   const right =
     pressed("d", "arrowright") || controls.right;
 
+  // Preserve the corrected A/D steering direction.
   const steeringInput = (left ? 1 : 0) - (right ? 1 : 0);
 
   if (forward) {
@@ -2090,11 +2144,19 @@ function updateCar(dt) {
   carRotation +=
     steeringInput * spec.steering * speedFactor * direction * dt;
 
-  car.position.x += Math.sin(carRotation) * carSpeed * dt;
-  car.position.z += Math.cos(carRotation) * carSpeed * dt;
+  const dx = Math.sin(carRotation) * carSpeed * dt;
+  const dz = Math.cos(carRotation) * carSpeed * dt;
 
-  car.position.x = clamp(car.position.x, -900, 900);
-  car.position.z = clamp(car.position.z, -900, 900);
+  const moved = moveWithCollision(car, dx, dz, CAR_RADIUS, {
+    traffic: true,
+    pedestrians: true
+  });
+
+  // Reduce speed when the car hits an obstacle.
+  if (!moved && Math.abs(carSpeed) > .5) {
+    carSpeed *= -.12;
+    showMessage("COLLISION");
+  }
 
   car.rotation.y = carRotation;
 
@@ -2130,7 +2192,6 @@ function updateCamera(dt) {
   );
 
   const smoothing = 1 - Math.pow(.001, dt);
-
   camera.position.lerp(cameraPosition, smoothing);
   camera.lookAt(cameraTarget);
 }
@@ -2140,7 +2201,10 @@ function updateCamera(dt) {
    ========================================================= */
 
 function updateHUD(dt) {
-  if (hud.speed) hud.speed.textContent = Math.round(Math.abs(carSpeed) * 3.6);
+  if (hud.speed) {
+    hud.speed.textContent = Math.round(Math.abs(carSpeed) * 3.6);
+  }
+
   if (hud.cash) hud.cash.textContent = "$" + cash;
 
   if (hud.mode) {
@@ -2229,7 +2293,6 @@ function drawMinimap() {
   }
 
   const position = driving ? car.position : player.position;
-
   mapContext.fillStyle = "#ff4136";
   mapContext.beginPath();
   mapContext.arc(
@@ -2264,8 +2327,7 @@ genderStyle.textContent = `
 }
 #gender-selector button:disabled{
   cursor:not-allowed;opacity:.55
-}
-`;
+}`;
 document.head.appendChild(genderStyle);
 
 const genderSelector = document.createElement("div");
@@ -2273,14 +2335,12 @@ genderSelector.id = "gender-selector";
 
 function makeGenderButton(gender, label) {
   const button = document.createElement("button");
-
   button.type = "button";
   button.textContent = label;
   button.dataset.gender = gender;
 
   button.addEventListener("click", () => {
     if (requestedStart) return;
-
     selectedGender = gender;
     rebuildLocalCharacter(gender);
     updateGenderButtons();
@@ -2291,7 +2351,6 @@ function makeGenderButton(gender, label) {
 
 const maleButton = makeGenderButton("male", "MALE");
 const femaleButton = makeGenderButton("female", "FEMALE");
-
 genderSelector.append(maleButton, femaleButton);
 
 const nameInput = document.getElementById("player-name");
@@ -2362,7 +2421,6 @@ function restartGame() {
 
   cash = 0;
   checkpointIndex = 0;
-
   paused = false;
   clearControls();
 
@@ -2442,7 +2500,6 @@ if (menuButton) {
     if (startScreen) startScreen.classList.remove("hidden");
 
     clearControls();
-
     setTimeout(() => socket.connect(), 300);
   });
 }
@@ -2454,7 +2511,6 @@ if (menuButton) {
 window.addEventListener("resize", () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
-
   renderer.setSize(innerWidth, innerHeight);
   renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1));
 });
@@ -2495,6 +2551,7 @@ function animate() {
     }
 
     updateTraffic(dt);
+    updateTrafficCollisions();
     updatePedestrians(dt);
     updateRemotePlayers(dt);
     updateCamera(dt);

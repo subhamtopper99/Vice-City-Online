@@ -68,7 +68,7 @@ const carPaints = [
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x91c4df);
-scene.fog = new THREE.Fog(0x91c4df, 180, 950);
+scene.fog = new THREE.Fog(0x8eb8d4, 220, 1100);
 
 const camera = new THREE.PerspectiveCamera(
   65, innerWidth / innerHeight, 0.1, 1200
@@ -183,7 +183,7 @@ buildingTexture.repeat.set(1, 2);
 const mat = {
   // A flat dark material avoids stretched UVs and white-looking roads.
   road: new THREE.MeshLambertMaterial({
-    color: 0x30343a
+    color: 0x2c3036
   }),
   sidewalk: new THREE.MeshLambertMaterial({ map: pavementTexture }),
   grass: new THREE.MeshLambertMaterial({ map: grassTexture }),
@@ -202,9 +202,9 @@ const buildingMaterials = [
   map: buildingTexture
 }));
 
-scene.add(new THREE.HemisphereLight(0xcceaff, 0x596044, 2));
+scene.add(new THREE.HemisphereLight(0xd4eeff, 0x4a5a3a, 2.2));
 
-const sun = new THREE.DirectionalLight(0xffedcf, 1.4);
+const sun = new THREE.DirectionalLight(0xfff2d8, 1.65);
 sun.position.set(-250, 500, 200);
 scene.add(sun);
 
@@ -2952,7 +2952,7 @@ window.addEventListener("resize", () => {
 function createBaseGround() {
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(CONFIG.CITY_LIMIT * 2.35, CONFIG.CITY_LIMIT * 2.35),
-    new THREE.MeshLambertMaterial({ color: 0x477b43, map: grassTexture })
+    new THREE.MeshLambertMaterial({ color: 0x4a8246, map: grassTexture })
   );
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -.72;
@@ -2967,19 +2967,19 @@ function createCentralBillboard() {
   const ctx = canvas.getContext("2d");
 
   const gradient = ctx.createLinearGradient(0, 0, 1024, 512);
-  gradient.addColorStop(0, "#111b43");
-  gradient.addColorStop(.52, "#733a82");
-  gradient.addColorStop(1, "#f06a72");
+  gradient.addColorStop(0, "#0d1535");
+  gradient.addColorStop(0.5, "#5a2d6b");
+  gradient.addColorStop(1, "#e85a62");
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, 1024, 512);
 
   ctx.strokeStyle = "#ffe6a6";
-  ctx.lineWidth = 20;
-  ctx.strokeRect(16, 16, 992, 480);
+  ctx.lineWidth = 22;
+  ctx.strokeRect(18, 18, 988, 476);
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.shadowColor = "#ffb7d5";
-  ctx.shadowBlur = 28;
+  ctx.shadowBlur = 32;
   ctx.fillStyle = "#fff5d9";
   ctx.font = "bold 110px Arial";
   ctx.fillText("My love", 512, 185);
@@ -2990,22 +2990,78 @@ function createCentralBillboard() {
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
 
-  const frameMaterial = new THREE.MeshLambertMaterial({ color: 0x252b35 });
-  const postMaterial = new THREE.MeshLambertMaterial({ color: 0x515b68 });
+  const frameMat = new THREE.MeshLambertMaterial({ color: 0x1e2430 });
+  const droneBodyMat = new THREE.MeshLambertMaterial({ color: 0x2a3038 });
+  const droneArmMat = new THREE.MeshLambertMaterial({ color: 0x3a424c });
+  const rotorMat = new THREE.MeshBasicMaterial({ color: 0x88aacc, transparent: true, opacity: 0.65 });
 
+  const group = new THREE.Group();
+  group.position.set(29, 38, -24); // floating high in the air
+
+  // Main sign
   const sign = new THREE.Mesh(
     new THREE.PlaneGeometry(42, 21),
     new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide })
   );
-  // The requested sign is positioned in the central map area.
-  sign.position.set(29, 16.5, -24);
-  world.add(sign);
+  group.add(sign);
 
-  box(world, 29, 7.8, -24, 1.2, 15.6, 1.2, postMaterial);
-  box(world, 29, 27.2, -24, 43.5, .9, 1.4, frameMaterial);
-  box(world, 7.5, 16.5, -24, .9, 22, 1.4, frameMaterial);
-  box(world, 50.5, 16.5, -24, .9, 22, 1.4, frameMaterial);
-  box(world, 29, 8.4, -24, 16, .9, 10, frameMaterial);
+  // Frame
+  box(group, 0, 11.2, 0, 43.5, 0.9, 1.4, frameMat);
+  box(group, 0, -11.2, 0, 43.5, 0.9, 1.4, frameMat);
+  box(group, -21.5, 0, 0, 0.9, 22.5, 1.4, frameMat);
+  box(group, 21.5, 0, 0, 0.9, 22.5, 1.4, frameMat);
+
+  // Four drones holding the corners
+  const droneOffsets = [
+    [-20, 10.5, 1.8],
+    [20, 10.5, 1.8],
+    [-20, -10.5, 1.8],
+    [20, -10.5, 1.8]
+  ];
+
+  const drones = [];
+  for (const [dx, dy, dz] of droneOffsets) {
+    const drone = new THREE.Group();
+    drone.position.set(dx, dy, dz);
+
+    // Body
+    const body = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.45, 1.4), droneBodyMat);
+    drone.add(body);
+
+    // Arms
+    for (const ax of [-0.9, 0.9]) {
+      for (const az of [-0.9, 0.9]) {
+        const arm = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.12, 0.12), droneArmMat);
+        arm.position.set(ax * 0.6, 0.1, az * 0.6);
+        arm.rotation.y = Math.atan2(az, ax);
+        drone.add(arm);
+      }
+    }
+
+    // Rotors (simple spinning discs)
+    const rotor1 = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.04, 12), rotorMat);
+    rotor1.position.set(-0.9, 0.28, -0.9);
+    const rotor2 = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.04, 12), rotorMat);
+    rotor2.position.set(0.9, 0.28, -0.9);
+    const rotor3 = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.04, 12), rotorMat);
+    rotor3.position.set(-0.9, 0.28, 0.9);
+    const rotor4 = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.04, 12), rotorMat);
+    rotor4.position.set(0.9, 0.28, 0.9);
+    drone.add(rotor1, rotor2, rotor3, rotor4);
+
+    drones.push({ drone, rotors: [rotor1, rotor2, rotor3, rotor4] });
+    group.add(drone);
+  }
+
+  // Soft hover animation data
+  group.userData.hoverTime = Math.random() * Math.PI * 2;
+  group.userData.drones = drones;
+
+  world.add(group);
+
+  // Store for animation
+  if (!window.floatingBillboards) window.floatingBillboards = [];
+  window.floatingBillboards.push(group);
 }
 
 /* =========================================================
@@ -3038,6 +3094,19 @@ function animate() {
 
   const dt = Math.min(clock.getDelta(), .05);
   updateSky(dt);
+  // Floating billboard hover + drone rotors
+  if (window.floatingBillboards) {
+    for (const bb of window.floatingBillboards) {
+      bb.userData.hoverTime += dt * 1.4;
+      bb.position.y = 38 + Math.sin(bb.userData.hoverTime) * 1.6;
+      bb.rotation.y = Math.sin(bb.userData.hoverTime * 0.3) * 0.04;
+      if (bb.userData.drones) {
+        for (const d of bb.userData.drones) {
+          for (const r of d.rotors) r.rotation.y += dt * 28;
+        }
+      }
+    }
+  }
   updateVehicleAudio();
 
   if (started && !paused) {

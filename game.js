@@ -1,7 +1,7 @@
 import * as THREE from "https://esm.sh/three@0.160.0";
 
 /* =========================================================
-   VICE CITY — UPDATE 26
+   VICE CITY — UPDATE 27
    Complete game.js
    Original Update 23 visuals preserved.
    Multiplayer connection and reconnection improvements.
@@ -106,6 +106,32 @@ const BACK_SPEED = 4.2;
 const STAMINA_MAX = 100;
 const NITRO_MAX = 100;
 const WHEELBASE = 2.9;
+
+// Touch devices get an on-screen joystick and buttons
+const touchCapable =
+  !!(window.matchMedia && window.matchMedia("(pointer:coarse)").matches) ||
+  (navigator.maxTouchPoints > 1 && Math.min(screen.width, screen.height) < 900);
+let touchUIActive = false;
+
+(function setupMobilePage() {
+  let meta = document.querySelector('meta[name="viewport"]');
+  if (!meta) {
+    meta = document.createElement("meta");
+    meta.name = "viewport";
+    document.head.appendChild(meta);
+  }
+  meta.content =
+    "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
+
+  const style = document.createElement("style");
+  style.textContent = `
+html,body{overscroll-behavior:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
+body.vice-touch{-webkit-user-select:none;user-select:none}
+body.vice-touch input{-webkit-user-select:text;user-select:text}
+canvas{touch-action:none;display:block}
+#vice-garage,#vice-chat-log{touch-action:pan-y}`;
+  document.head.appendChild(style);
+})();
 
 // Heights of each surface type (0 road, 1 curb, 2 lot grass, 3 park grass)
 const GROUND_HEIGHT = [0, .235, -.28, .29];
@@ -883,7 +909,8 @@ function createNameTag(name) {
     ctx.clearRect(0, 0, 512, 128);
     ctx.fillStyle = "rgba(0,0,0,.78)";
     ctx.beginPath();
-    ctx.roundRect(12, 12, 488, 104, 20);
+    if (ctx.roundRect) ctx.roundRect(12, 12, 488, 104, 20);
+    else ctx.rect(12, 12, 488, 104);
     ctx.fill();
 
     ctx.strokeStyle = "#f5c84c";
@@ -1219,6 +1246,8 @@ let jumpOffset = 0;
 let playerSpeedNow = 0;
 let lastMoveSign = 1;
 let camShake = 0;
+let crashCooldown = 0;
+let longAccSmooth = 0;
 let prevCarSpeed = 0;
 let carPitch = 0;
 let carRoll = 0;
@@ -1507,7 +1536,8 @@ bindMobileControl("vice-nitro-button", "boost");
 
 function updateVehicleButtons() {
   engineButton.textContent = engineRunning ? "STOP ENGINE" : "START ENGINE";
-  vehicleControls.style.display = driving && started && !paused ? "flex" : "none";
+  vehicleControls.style.display =
+    driving && started && !paused && !touchUIActive ? "flex" : "none";
 }
 
 function jump() {
@@ -1638,6 +1668,7 @@ function spawnVehicle(type) {
   const oldRotation = playerRotation;
 
   scene.remove(car);
+  if (car.userData.paint) car.userData.paint.dispose();
   selectedVehicleType = type;
 
   const spec = VEHICLES[type];
@@ -1724,7 +1755,21 @@ garageHelp.addEventListener("click", closeGarage);
    MULTIPLAYER — IMPROVED JOIN AND RECONNECTION HANDLING
    ========================================================= */
 
-const socket = window.io({
+function createOfflineSocket() {
+  // Used only if the socket.io script failed to load, so the page does not crash
+  console.warn("socket.io not available — multiplayer is offline");
+  const stub = {
+    connected: false,
+    id: null,
+    on() { return stub; },
+    emit() {},
+    connect() {},
+    disconnect() {}
+  };
+  return stub;
+}
+
+const socket = (window.io || createOfflineSocket)({
   autoConnect: true,
   transports: ["websocket", "polling"],
   reconnection: true,
@@ -2152,10 +2197,16 @@ function addChatLine(name, message, system = false) {
   }
 
   chatLog.scrollTop = chatLog.scrollHeight;
+
+  if (!system && typeof chatVisible !== "undefined" && !chatVisible) {
+    chatUnread++;
+    updateChatBadge();
+  }
 }
 
 function openChat() {
   if (!started || paused || garageOpen) return;
+  if (!chatVisible) setChatVisible(true);
   chatOpen = true;
   chatInput.placeholder = "Write a message...";
   chatInput.focus();
@@ -2174,7 +2225,7 @@ function sendChatMessage() {
 
   socket.emit("chat:message", message);
   chatInput.value = "";
-  chatInput.focus();
+  if (!touchUIActive) chatInput.focus();
 }
 
 chatSend.addEventListener("click", sendChatMessage);
@@ -2199,6 +2250,76 @@ socket.on("chat:message", data => {
     );
   }
 });
+
+/* ---------- Chat show / hide toggle ---------- */
+
+const chatToggleStyle = document.createElement("style");
+chatToggleStyle.textContent = `
+#vice-chat-toggle{position:relative;padding:6px 11px;border:1px solid #d5b34d;border-radius:8px;background:#17232e;color:#ffd65b;font:bold 11px Arial,sans-serif;letter-spacing:.5px;cursor:pointer;touch-action:manipulation}
+#vice-chat-toggle.on{background:#b7831c;color:#fff}
+#vice-chat-badge{position:absolute;right:-6px;top:-7px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#e0392d;color:#fff;font:bold 10px/16px Arial,sans-serif;text-align:center;display:none;box-sizing:border-box}
+body.vice-touch #vice-chat{position:fixed;left:50%;top:calc(56px + env(safe-area-inset-top,0px));transform:translateX(-50%);width:min(420px,72vw);max-width:none;margin:0;z-index:2147483001}
+body.vice-touch #vice-chat-log{height:84px}
+body.vice-touch #vice-chat-hint{display:none}
+body.vice-touch #vice-chat-input{font-size:16px}
+`;
+document.head.appendChild(chatToggleStyle);
+
+const chatToggle = document.createElement("button");
+chatToggle.id = "vice-chat-toggle";
+chatToggle.type = "button";
+chatToggle.textContent = "CHAT";
+const chatBadge = document.createElement("span");
+chatBadge.id = "vice-chat-badge";
+chatToggle.appendChild(chatBadge);
+
+let chatVisible = !touchCapable;   // hidden by default on phones
+let chatUnread = 0;
+
+function updateChatBadge() {
+  chatBadge.style.display = chatUnread > 0 ? "block" : "none";
+  chatBadge.textContent = chatUnread > 9 ? "9+" : String(chatUnread);
+}
+
+function setChatVisible(visible) {
+  chatVisible = visible;
+  chatPanel.style.display = visible ? "" : "none";
+  chatToggle.classList.toggle("on", visible);
+
+  if (visible) {
+    chatUnread = 0;
+    updateChatBadge();
+    chatLog.scrollTop = chatLog.scrollHeight;
+  } else if (chatOpen) {
+    closeChat();
+  }
+}
+
+function toggleChatPanel() {
+  setChatVisible(!chatVisible);
+}
+
+chatToggle.addEventListener("click", toggleChatPanel);
+
+// Desktop: the button sits just above the chat box
+if (missionPanel) missionPanel.insertBefore(chatToggle, chatPanel);
+else {
+  chatToggle.style.cssText = "position:fixed;left:10px;top:10px;z-index:10001";
+  document.body.appendChild(chatToggle);
+}
+
+// Typing in the box always pauses movement keys; leaving it resumes them
+chatInput.addEventListener("focus", () => {
+  if (started && !paused && !garageOpen) {
+    chatOpen = true;
+    clearControls();
+  }
+});
+chatInput.addEventListener("blur", () => {
+  chatOpen = false;
+});
+
+setChatVisible(chatVisible);
 
 addChatLine("VICE CITY", "Welcome! Press ENTER to chat.", true);
 
@@ -2749,12 +2870,17 @@ const controls = {
   brake: false,
   left: false,
   right: false,
-  boost: false
+  boost: false,
+  handbrake: false,
+  axisX: 0,   // touch joystick: + = right
+  axisY: 0    // touch joystick: + = up
 };
 
 function clearControls() {
   for (const key in keys) keys[key] = false;
-  for (const key in controls) controls[key] = false;
+  for (const key in controls) {
+    controls[key] = typeof controls[key] === "number" ? 0 : false;
+  }
 }
 
 function pressed(...names) {
@@ -2806,6 +2932,7 @@ window.addEventListener("keydown", event => {
   if (key === "r" && !event.repeat && started) restartGame();
   if (key === "h" && !event.repeat) playVehicleHorn();
   if (key === "q" && !event.repeat && started) cycleQuality();
+  if (key === "t" && !event.repeat && started) toggleChatPanel();
 
   if (key === "c" && !event.repeat && driving) {
     const color = pick(carPaints);
@@ -2863,7 +2990,8 @@ function toggleVehicle() {
       playerSpeedNow = 0;
       player.visible = false;
       updateVehicleButtons();
-      showMessage("VEHICLE ENTERED — PRESS START ENGINE");
+      if (touchUIActive) setEngineRunning(true);
+      else showMessage("VEHICLE ENTERED — PRESS START ENGINE");
     } else {
       showMessage("MOVE CLOSER TO YOUR CAR");
     }
@@ -2919,15 +3047,21 @@ function updatePlayer(dt) {
   }
 
   const locked = chatOpen || garageOpen;
-  const forward = !locked && (pressed("w", "arrowup") || controls.accelerate);
-  const backward = !locked && (pressed("s", "arrowdown") || controls.brake);
-  const left = !locked && (pressed("a", "arrowleft") || controls.left);
-  const right = !locked && (pressed("d", "arrowright") || controls.right);
+  const forward = !locked &&
+    (pressed("w", "arrowup") || controls.accelerate || controls.axisY > .25);
+  const backward = !locked &&
+    (pressed("s", "arrowdown") || controls.brake || controls.axisY < -.25);
   const wantSprint = !locked && (pressed("shift") || controls.boost);
 
-  // Turning works even while standing still
-  const turn = (left ? 1 : 0) - (right ? 1 : 0);
-  const turnRate = (forward || backward ? 2.4 : 2.9) * (sprinting ? .75 : 1);
+  // Turning works even while standing still (keys or touch joystick)
+  const turn = locked ? 0 : clamp(
+    ((pressed("a", "arrowleft") || controls.left) ? 1 : 0) -
+    ((pressed("d", "arrowright") || controls.right) ? 1 : 0) -
+    controls.axisX, -1, 1
+  );
+  const turnRate =
+    (forward || backward ? 2.4 : 2.9) * (touchUIActive ? 1.2 : 1) *
+    (sprinting ? .75 : 1);
   playerRotation += turn * turnRate * dt;
 
   // Sprint costs stamina; running dry forces a short rest
@@ -2952,9 +3086,13 @@ function updatePlayer(dt) {
   }
 
   // Smooth acceleration and deceleration
-  const target = forward
+  // Gentle joystick pushes walk slower; keys always give full speed
+  const keyMove = pressed("w", "arrowup", "s", "arrowdown") ||
+    controls.accelerate || controls.brake;
+  const analog = keyMove ? 1 : clamp(Math.abs(controls.axisY) * 1.25, .45, 1);
+  const target = (forward
     ? (sprinting ? SPRINT_SPEED : WALK_SPEED)
-    : backward ? BACK_SPEED : 0;
+    : backward ? BACK_SPEED : 0) * analog;
   playerSpeedNow += (target - playerSpeedNow) * Math.min(1, dt * (target > playerSpeedNow ? 7 : 11));
   if (playerSpeedNow < .05 && target === 0) playerSpeedNow = 0;
 
@@ -2985,6 +3123,7 @@ function updatePlayer(dt) {
    ========================================================= */
 
 function updateCar(dt) {
+  crashCooldown = Math.max(0, crashCooldown - dt);
   const spec = car.userData.spec;
   const locked = chatOpen || garageOpen;
   const driver = driving && engineRunning && !locked;
@@ -3005,10 +3144,12 @@ function updateCar(dt) {
   if (driver) {
     throttle = (pressed("w", "arrowup") || controls.accelerate) ? 1 : 0;
     brake = (pressed("s", "arrowdown") || controls.brake) ? 1 : 0;
-    steer =
+    steer = clamp(
       ((pressed("a", "arrowleft") || controls.left) ? 1 : 0) -
-      ((pressed("d", "arrowright") || controls.right) ? 1 : 0);
-    handbrake = !!keys[" "];
+      ((pressed("d", "arrowright") || controls.right) ? 1 : 0) -
+      controls.axisX, -1, 1
+    );
+    handbrake = !!keys[" "] || controls.handbrake;
     wantNitro = pressed("shift", "n") || controls.boost;
   }
 
@@ -3101,11 +3242,12 @@ function updateCar(dt) {
   const opts = { traffic: true, pedestrians: true };
   let impact = 0;
 
+  // Hard hits bounce a little; light scrapes just slide along the wall
   const nx = car.position.x + carVel.x * dt;
   if (positionBlocked(nx, car.position.z, CAR_RADIUS, opts)) {
     impact = Math.max(impact, Math.abs(carVel.x));
-    carVel.x *= -.3;
-    carVel.y *= .85;
+    carVel.x = impact > 3 ? carVel.x * -.2 : 0;
+    carVel.y *= .985;
   } else {
     car.position.x = nx;
   }
@@ -3113,16 +3255,18 @@ function updateCar(dt) {
   const nz = car.position.z + carVel.y * dt;
   if (positionBlocked(car.position.x, nz, CAR_RADIUS, opts)) {
     impact = Math.max(impact, Math.abs(carVel.y));
-    carVel.y *= -.3;
-    carVel.x *= .85;
+    carVel.y = impact > 3 ? carVel.y * -.2 : 0;
+    carVel.x *= .985;
   } else {
     car.position.z = nz;
   }
 
-  if (impact > 4 && driving) {
+  if (impact > 6 && driving && crashCooldown <= 0) {
+    crashCooldown = .6;
     camShake = Math.max(camShake, Math.min(1.2, impact / 18));
     showMessage("CRASH");
     playCrashSound(Math.min(1, impact / 25));
+    if (touchUIActive && navigator.vibrate) navigator.vibrate(40);
   }
 
   carSpeed = carVel.x * Math.sin(carRotation) + carVel.y * Math.cos(carRotation);
@@ -3132,10 +3276,11 @@ function updateCar(dt) {
   car.position.y += (gy - car.position.y) * Math.min(1, 14 * dt);
   car.rotation.y = carRotation;
 
-  const longAcc = (carSpeed - prevCarSpeed) / Math.max(dt, .001);
+  const rawAcc = (carSpeed - prevCarSpeed) / Math.max(dt, .001);
   prevCarSpeed = carSpeed;
+  longAccSmooth += (clamp(rawAcc, -40, 40) - longAccSmooth) * Math.min(1, dt * 6);
 
-  const pitchTarget = -clamp(longAcc * .0035, -.07, .07);
+  const pitchTarget = -clamp(longAccSmooth * .0035, -.07, .07);
   const rollTarget =
     steerVisual * Math.min(1, Math.abs(carSpeed) / 40) * .07 + vL * .004;
   const blend = Math.min(1, 6 * dt);
@@ -3181,36 +3326,45 @@ function updateCar(dt) {
 const cameraTarget = new THREE.Vector3();
 const cameraPosition = new THREE.Vector3();
 let fovCurrent = 65;
+let camHeading = 0;
+let camDistance = 9.5;
+let camFocusY = 0;
 
+// All smoothing is frame-rate independent (exp), so it stays smooth at low FPS.
 function updateCamera(dt) {
   const target = driving ? car : player;
-  const rotation = driving ? carRotation : playerRotation;
+  const heading = driving ? carRotation : playerRotation;
   const kmh = Math.abs(carSpeed) * 3.6;
 
-  const distance = driving
+  // The camera swings round gently behind the vehicle instead of snapping
+  const diff = Math.atan2(
+    Math.sin(heading - camHeading), Math.cos(heading - camHeading)
+  );
+  camHeading += diff * (1 - Math.exp(-(driving ? 6 : 10) * dt));
+
+  const distanceTarget = driving
     ? 14 + Math.min(kmh / 70, 4) + (nitroActive ? 2 : 0)
     : 9.5 + (sprinting ? 1 : 0);
+  camDistance += (distanceTarget - camDistance) * (1 - Math.exp(-3 * dt));
+
   const height = driving ? 6.6 + Math.min(kmh / 150, 1.2) : 5.2;
   const lookHeight = driving ? 1.6 : 1.8;
 
-  cameraTarget.set(
-    target.position.x,
-    target.position.y + lookHeight,
-    target.position.z
-  );
+  // Curb bumps and jumps do not jerk the camera
+  camFocusY += (target.position.y - camFocusY) * (1 - Math.exp(-8 * dt));
+
+  cameraTarget.set(target.position.x, camFocusY + lookHeight, target.position.z);
 
   // Pull the camera in if a building would be in the way
   let px = 0, pz = 0;
   for (const k of [1, .72, .5, .32]) {
-    px = target.position.x - Math.sin(rotation) * distance * k;
-    pz = target.position.z - Math.cos(rotation) * distance * k;
+    px = target.position.x - Math.sin(camHeading) * camDistance * k;
+    pz = target.position.z - Math.cos(camHeading) * camDistance * k;
     if (!circleHitsBuilding(px, pz, 1.4)) break;
   }
 
-  cameraPosition.set(px, target.position.y + height, pz);
-
-  const smoothing = 1 - Math.pow(0.0008, dt);
-  camera.position.lerp(cameraPosition, smoothing);
+  cameraPosition.set(px, camFocusY + height, pz);
+  camera.position.lerp(cameraPosition, 1 - Math.exp(-(driving ? 12 : 10) * dt));
 
   const shake = camShake + (nitroActive ? .08 : 0);
   if (shake > .01) {
@@ -3224,7 +3378,7 @@ function updateCamera(dt) {
   const targetFov = 65 + (driving
     ? Math.min(kmh / 300, 1) * 10 + (nitroActive ? 9 : 0)
     : (sprinting ? 6 : 0));
-  fovCurrent += (targetFov - fovCurrent) * Math.min(1, dt * 4);
+  fovCurrent += (targetFov - fovCurrent) * (1 - Math.exp(-4 * dt));
 
   if (Math.abs(camera.fov - fovCurrent) > .05) {
     camera.fov = fovCurrent;
@@ -3280,8 +3434,7 @@ let lastBarColor = "";
 function updateBars() {
   const show = started && !paused;
   barsRoot.style.display = show ? "block" : "none";
-  sprintButton.style.display =
-    isTouchDevice && show && !driving ? "block" : "none";
+  sprintButton.style.display = "none";   // replaced by the touch UI
   if (!show) return;
 
   const mode = driving ? "nitro" : "stamina";
@@ -3346,6 +3499,236 @@ function updateHUD(dt) {
 }
 
 /* =========================================================
+   TOUCH UI — JOYSTICK AND BUTTONS FOR PHONES AND TABLETS
+   ========================================================= */
+
+const touchStyle = document.createElement("style");
+touchStyle.textContent = `
+#vice-stick{position:fixed;left:calc(22px + env(safe-area-inset-left,0px));bottom:calc(22px + env(safe-area-inset-bottom,0px));width:140px;height:140px;border-radius:50%;background:rgba(255,255,255,.12);border:2px solid rgba(255,255,255,.45);display:none;z-index:2147483000;touch-action:none}
+#vice-stick-knob{position:absolute;left:50%;top:50%;width:58px;height:58px;margin:-29px 0 0 -29px;border-radius:50%;background:rgba(255,255,255,.55);border:2px solid rgba(255,255,255,.9);pointer-events:none}
+#vice-touch-right{position:fixed;right:calc(12px + env(safe-area-inset-right,0px));bottom:calc(12px + env(safe-area-inset-bottom,0px));width:250px;height:240px;pointer-events:none;display:none;z-index:2147483000}
+.vt-btn{position:absolute;pointer-events:auto;display:none;align-items:center;justify-content:center;border-radius:50%;border:2px solid rgba(255,255,255,.85);background:rgba(12,24,36,.72);color:#fff;font:900 11px Arial,sans-serif;letter-spacing:.4px;touch-action:none;-webkit-user-select:none;user-select:none}
+.vt-btn.pressed{transform:scale(.92);filter:brightness(1.5)}
+#vice-touch-top{position:fixed;left:50%;top:calc(6px + env(safe-area-inset-top,0px));transform:translateX(-50%);display:none;gap:8px;z-index:2147483002}
+.vt-sys{position:relative;width:44px;height:38px;border-radius:10px;border:2px solid rgba(255,255,255,.7);background:rgba(12,24,36,.72);color:#fff;font:900 10px Arial,sans-serif;touch-action:manipulation}
+#vice-touch-top #vice-chat-toggle{width:44px;height:38px;padding:0;border-radius:10px;border:2px solid rgba(255,255,255,.7);background:rgba(12,24,36,.72);color:#fff}
+#vice-touch-top #vice-chat-toggle.on{background:rgba(183,131,28,.9)}
+#vice-rotate-hint{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);padding:14px 18px;border-radius:12px;background:rgba(0,0,0,.78);color:#fff;font:bold 14px Arial,sans-serif;text-align:center;z-index:2147483003;pointer-events:none;display:none;max-width:78vw}
+body.vice-touch #vice-bars{bottom:auto;top:calc(52px + env(safe-area-inset-top,0px));width:min(210px,38vw)}
+body.vice-touch #vice-bar-hint{display:none}
+`;
+document.head.appendChild(touchStyle);
+
+const TOUCH_BUTTONS = [
+  { label: "GAS",    mode: "drive", size: 88, right: 8,   bottom: 8,   hold: "accelerate", bg: "rgba(30,140,70,.8)" },
+  { label: "BRAKE",  mode: "drive", size: 68, right: 108, bottom: 8,   hold: "brake",      bg: "rgba(190,50,40,.8)" },
+  { label: "NITRO",  mode: "drive", size: 60, right: 14,  bottom: 110, hold: "boost",      bg: "rgba(200,100,20,.85)" },
+  { label: "DRIFT",  mode: "drive", size: 58, right: 86,  bottom: 100, hold: "handbrake" },
+  { label: "HORN",   mode: "drive", size: 50, right: 152, bottom: 98,  tap: () => playVehicleHorn() },
+  { id: "engine", label: "ENGINE", mode: "drive", size: 52, right: 188, bottom: 8, tap: () => toggleEngine() },
+  { label: "EXIT",   mode: "drive", size: 52, right: 20,  bottom: 178, tap: () => toggleVehicle() },
+  { label: "JUMP",   mode: "foot",  size: 88, right: 8,   bottom: 8,   tap: () => jump(), bg: "rgba(30,110,170,.8)" },
+  { label: "SPRINT", mode: "foot",  size: 68, right: 108, bottom: 8,   hold: "boost",      bg: "rgba(30,140,70,.8)" },
+  { label: "ENTER",  mode: "foot",  size: 60, right: 14,  bottom: 110, tap: () => toggleVehicle() }
+];
+
+let touchBuilt = false;
+let stickEl = null, stickKnob = null, touchRight = null, touchTop = null, rotateHint = null;
+let stickPointer = null;
+let engineTouchButton = null;
+const touchModeButtons = [];
+let touchSignature = "";
+
+function buildTouchUI() {
+  if (touchBuilt) return;
+  touchBuilt = true;
+  touchUIActive = true;
+  document.body.classList.add("vice-touch");
+
+  // Hide any old HTML on-screen buttons so they do not overlap ours
+  for (const id of ["accelerate", "brake", "left", "right"]) {
+    const el = document.getElementById(id);
+    if (el) el.style.setProperty("display", "none", "important");
+  }
+  document.querySelectorAll(
+    "#mobile-controls,.mobile-controls,#touch-controls,.touch-controls"
+  ).forEach(el => el.style.setProperty("display", "none", "important"));
+
+  /* ----- joystick ----- */
+  stickEl = document.createElement("div");
+  stickEl.id = "vice-stick";
+  stickKnob = document.createElement("div");
+  stickKnob.id = "vice-stick-knob";
+  stickEl.appendChild(stickKnob);
+  document.body.appendChild(stickEl);
+
+  const STICK_RADIUS = 52;
+
+  function moveStick(event) {
+    const rect = stickEl.getBoundingClientRect();
+    let dx = event.clientX - (rect.left + rect.width / 2);
+    let dy = event.clientY - (rect.top + rect.height / 2);
+    const length = Math.hypot(dx, dy);
+
+    if (length > STICK_RADIUS) {
+      dx = dx / length * STICK_RADIUS;
+      dy = dy / length * STICK_RADIUS;
+    }
+
+    stickKnob.style.transform = `translate(${dx}px,${dy}px)`;
+
+    let ax = dx / STICK_RADIUS;
+    let ay = -dy / STICK_RADIUS;
+    if (Math.hypot(ax, ay) < .12) { ax = 0; ay = 0; }
+
+    controls.axisX = ax;
+    controls.axisY = ay;
+  }
+
+  function endStick(event) {
+    if (event.pointerId !== stickPointer) return;
+    stickPointer = null;
+    stickKnob.style.transform = "translate(0,0)";
+    controls.axisX = 0;
+    controls.axisY = 0;
+  }
+
+  stickEl.addEventListener("pointerdown", event => {
+    event.preventDefault();
+    stickPointer = event.pointerId;
+    stickEl.setPointerCapture?.(event.pointerId);
+    moveStick(event);
+  });
+  stickEl.addEventListener("pointermove", event => {
+    if (event.pointerId === stickPointer) moveStick(event);
+  });
+  stickEl.addEventListener("pointerup", endStick);
+  stickEl.addEventListener("pointercancel", endStick);
+  stickEl.addEventListener("lostpointercapture", endStick);
+
+  /* ----- action buttons ----- */
+  touchRight = document.createElement("div");
+  touchRight.id = "vice-touch-right";
+  document.body.appendChild(touchRight);
+
+  for (const def of TOUCH_BUTTONS) {
+    const button = document.createElement("div");
+    button.className = "vt-btn";
+    button.textContent = def.label;
+    button.style.width = button.style.height = def.size + "px";
+    button.style.right = def.right + "px";
+    button.style.bottom = def.bottom + "px";
+    if (def.bg) button.style.background = def.bg;
+
+    button.addEventListener("pointerdown", event => {
+      event.preventDefault();
+      button.classList.add("pressed");
+      button.setPointerCapture?.(event.pointerId);
+      if (def.hold) controls[def.hold] = true;
+      if (def.tap) def.tap();
+    });
+
+    const release = () => {
+      button.classList.remove("pressed");
+      if (def.hold) controls[def.hold] = false;
+    };
+    button.addEventListener("pointerup", release);
+    button.addEventListener("pointercancel", release);
+    button.addEventListener("lostpointercapture", release);
+
+    touchRight.appendChild(button);
+    touchModeButtons.push({ el: button, mode: def.mode });
+    if (def.id === "engine") engineTouchButton = button;
+  }
+
+  /* ----- top row: pause, chat, garage, fullscreen ----- */
+  touchTop = document.createElement("div");
+  touchTop.id = "vice-touch-top";
+
+  const makeSys = (label, action) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "vt-sys";
+    b.textContent = label;
+    b.addEventListener("click", action);
+    return b;
+  };
+
+  touchTop.appendChild(makeSys("PAUSE", () => togglePause()));
+  touchTop.appendChild(chatToggle);               // chat toggle moves here
+  document.body.appendChild(chatPanel);          // chat becomes a floating overlay
+  touchTop.appendChild(makeSys("CARS", () => toggleGarage()));
+
+  if (document.fullscreenEnabled || document.webkitFullscreenEnabled) {
+    touchTop.appendChild(makeSys("FULL", toggleFullscreen));
+  }
+  document.body.appendChild(touchTop);
+
+  rotateHint = document.createElement("div");
+  rotateHint.id = "vice-rotate-hint";
+  rotateHint.textContent = "Rotate your phone to landscape for the best experience";
+  document.body.appendChild(rotateHint);
+
+  // Stop the page from scrolling / zooming while playing
+  document.addEventListener("touchmove", event => {
+    const inside = event.target.closest && event.target.closest("#vice-chat, #vice-garage");
+    if (started && !inside) event.preventDefault();
+  }, { passive: false });
+  document.addEventListener("gesturestart", event => event.preventDefault());
+  document.addEventListener("contextmenu", event => event.preventDefault());
+
+  updateVehicleButtons();
+}
+
+function toggleFullscreen() {
+  const element = document.documentElement;
+  const active = document.fullscreenElement || document.webkitFullscreenElement;
+
+  if (!active) {
+    const request = element.requestFullscreen || element.webkitRequestFullscreen;
+    if (request) request.call(element);
+  } else {
+    const exit = document.exitFullscreen || document.webkitExitFullscreen;
+    if (exit) exit.call(document);
+  }
+}
+
+function updateTouchUI() {
+  if (!touchUIActive) return;
+
+  const active = started && !paused;
+  const mode = active ? (driving ? "drive" : "foot") : "off";
+  const portrait = innerHeight > innerWidth;
+  const signature = mode + (engineRunning ? "1" : "0") + (portrait ? "p" : "l") + (started ? "s" : "x");
+
+  if (signature === touchSignature) return;
+  touchSignature = signature;
+
+  stickEl.style.display = active ? "block" : "none";
+  touchRight.style.display = active ? "block" : "none";
+  touchTop.style.display = started && !paused ? "flex" : "none";
+  rotateHint.style.display = active && portrait ? "block" : "none";
+
+  for (const item of touchModeButtons) {
+    item.el.style.display = item.mode === mode ? "flex" : "none";
+  }
+
+  if (engineTouchButton) {
+    engineTouchButton.textContent = engineRunning ? "STOP" : "START";
+  }
+
+  if (!active) clearControls();
+}
+
+// Phones are detected at load; hybrid devices switch on the first touch.
+if (touchCapable) buildTouchUI();
+else window.addEventListener("touchstart", buildTouchUI, { once: true, passive: true });
+
+window.addEventListener("orientationchange", () => {
+  setTimeout(() => window.dispatchEvent(new Event("resize")), 250);
+});
+
+/* =========================================================
    MINIMAP
    ========================================================= */
 
@@ -3370,7 +3753,7 @@ function positionMinimap() {
     }
   }
 
-  const size = innerWidth < 700 ? 120 : 180;
+  const size = Math.min(innerWidth, innerHeight) < 600 ? 108 : 180;
   const set = (name, value) => minimap.style.setProperty(name, value, "important");
 
   set("position", "fixed");
@@ -4065,10 +4448,9 @@ function monitorPerformance(raw) {
 }
 
 // Weaker machines start on MEDIUM; the game drops further if FPS stays low.
-applyQuality(
-  (navigator.hardwareConcurrency || 8) <= 4 || (navigator.deviceMemory || 8) <= 4
-    ? 1 : 2
-);
+const weakDevice =
+  (navigator.hardwareConcurrency || 8) <= 4 || (navigator.deviceMemory || 8) <= 4;
+applyQuality(touchCapable ? (weakDevice ? 0 : 1) : (weakDevice ? 1 : 2));
 
 let minimapTimer = 0;
 
@@ -4099,9 +4481,15 @@ function animate() {
   updateVehicleAudio();
 
   if (started && !paused) {
-    updatePlayer(dt);
-    updateJump(dt);
-    updateCar(dt);
+    // Physics runs in small fixed steps so movement stays smooth and
+    // stable even when the frame rate drops on slower devices.
+    const steps = Math.min(3, Math.max(1, Math.ceil(dt * 60 - .15)));
+    const h = dt / steps;
+    for (let i = 0; i < steps; i++) {
+      updatePlayer(h);
+      updateJump(h);
+      updateCar(h);
+    }
 
     updateTraffic(dt);
     updatePedestrians(dt);
@@ -4120,6 +4508,7 @@ function animate() {
     }
   }
 
+  updateTouchUI();
   renderer.render(scene, camera);
 }
 

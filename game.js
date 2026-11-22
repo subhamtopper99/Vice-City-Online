@@ -21,41 +21,41 @@ const VEHICLES = {
   sport: {
     name: "911 SPORTS",
     subtitle: "Sports coupe",
-    topSpeed: 294, reverseSpeed: 45,
-    acceleration: 8, braking: 14,
-    friction: 5.5, steering: 1.65,
+    topSpeed: 294, reverseSpeed: 48,
+    acceleration: 9.2, braking: 16,
+    friction: 4.8, steering: 1.72, grip: 0.92,
     color: 0xe33b2e
   },
   supercar: {
     name: "296 SUPERCAR",
     subtitle: "High-performance supercar",
-    topSpeed: 330, reverseSpeed: 52,
-    acceleration: 10, braking: 16,
-    friction: 5.2, steering: 1.85,
+    topSpeed: 330, reverseSpeed: 55,
+    acceleration: 11.5, braking: 18,
+    friction: 4.5, steering: 1.95, grip: 0.88,
     color: 0xd71920
   },
   suv: {
     name: "PERFORMANCE SUV",
     subtitle: "Luxury performance SUV",
     topSpeed: 250, reverseSpeed: 42,
-    acceleration: 6.2, braking: 12,
-    friction: 6, steering: 1.28,
+    acceleration: 6.8, braking: 13.5,
+    friction: 5.8, steering: 1.22, grip: 0.78,
     color: 0x202a35
   },
   sedan: {
     name: "SPORT SEDAN",
     subtitle: "Four-door performance sedan",
     topSpeed: 230, reverseSpeed: 40,
-    acceleration: 4.8, braking: 11,
-    friction: 6, steering: 1.45,
+    acceleration: 5.4, braking: 12.5,
+    friction: 5.4, steering: 1.48, grip: 0.85,
     color: 0x2467a6
   },
   jeep: {
     name: "OFF-ROAD JEEP",
     subtitle: "Rugged off-road vehicle",
-    topSpeed: 180, reverseSpeed: 35,
-    acceleration: 3.8, braking: 9.5,
-    friction: 7, steering: 1.12,
+    topSpeed: 180, reverseSpeed: 38,
+    acceleration: 4.2, braking: 10.5,
+    friction: 6.5, steering: 1.08, grip: 0.72,
     color: 0x47714b
   }
 };
@@ -68,7 +68,7 @@ const carPaints = [
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x91c4df);
-scene.fog = new THREE.Fog(0x8eb8d4, 220, 1100);
+scene.fog = new THREE.Fog(0x87b0cc, 260, 1200);
 
 const camera = new THREE.PerspectiveCamera(
   65, innerWidth / innerHeight, 0.1, 1200
@@ -183,7 +183,7 @@ buildingTexture.repeat.set(1, 2);
 const mat = {
   // A flat dark material avoids stretched UVs and white-looking roads.
   road: new THREE.MeshLambertMaterial({
-    color: 0x2c3036
+    color: 0x2a2e34
   }),
   sidewalk: new THREE.MeshLambertMaterial({ map: pavementTexture }),
   grass: new THREE.MeshLambertMaterial({ map: grassTexture }),
@@ -202,9 +202,9 @@ const buildingMaterials = [
   map: buildingTexture
 }));
 
-scene.add(new THREE.HemisphereLight(0xd4eeff, 0x4a5a3a, 2.2));
+scene.add(new THREE.HemisphereLight(0xd8f0ff, 0x455538, 2.35));
 
-const sun = new THREE.DirectionalLight(0xfff2d8, 1.65);
+const sun = new THREE.DirectionalLight(0xfff5e0, 1.75);
 sun.position.set(-250, 500, 200);
 scene.add(sun);
 
@@ -2514,51 +2514,49 @@ function updatePlayer(dt) {
 
 function updateCar(dt) {
   if (!driving) {
-    carSpeed *= Math.max(0, 1 - 2.5 * dt);
+    carSpeed *= Math.max(0, 1 - 3.2 * dt);
     return;
   }
 
   if (!engineRunning) {
-    carSpeed = 0;
+    carSpeed *= Math.max(0, 1 - 4 * dt);
+    if (Math.abs(carSpeed) < 0.3) carSpeed = 0;
     return;
   }
 
   const spec = car.userData.spec;
   const maxSpeed = spec.topSpeed / 3.6;
   const reverseSpeed = spec.reverseSpeed / 3.6;
+  const grip = spec.grip || 0.85;
 
-  const forward =
-    pressed("w", "arrowup") || controls.accelerate;
+  const forward = pressed("w", "arrowup") || controls.accelerate;
+  const backward = pressed("s", "arrowdown") || controls.brake;
+  const left = pressed("a", "arrowleft") || controls.left;
+  const right = pressed("d", "arrowright") || controls.right;
 
-  const backward =
-    pressed("s", "arrowdown") || controls.brake;
-
-  const left =
-    pressed("a", "arrowleft") || controls.left;
-
-  const right =
-    pressed("d", "arrowright") || controls.right;
-
-  // Preserve the corrected A/D steering direction.
   const steeringInput = (left ? 1 : 0) - (right ? 1 : 0);
 
+  // Acceleration with slight curve for more natural feel
   if (forward) {
-    carSpeed += spec.acceleration * dt;
+    const accelFactor = 1 - Math.pow(Math.abs(carSpeed) / maxSpeed, 1.4);
+    carSpeed += spec.acceleration * Math.max(0.25, accelFactor) * dt;
   } else if (backward) {
     carSpeed -= spec.braking * dt;
-  } else if (carSpeed > 0) {
-    carSpeed = Math.max(0, carSpeed - spec.friction * dt);
-  } else if (carSpeed < 0) {
-    carSpeed = Math.min(0, carSpeed + spec.friction * dt);
+  } else {
+    const coast = spec.friction * (0.6 + Math.abs(carSpeed) * 0.015);
+    if (carSpeed > 0) carSpeed = Math.max(0, carSpeed - coast * dt);
+    else if (carSpeed < 0) carSpeed = Math.min(0, carSpeed + coast * dt);
   }
 
   carSpeed = clamp(carSpeed, -reverseSpeed, maxSpeed);
 
-  const speedFactor = Math.min(Math.abs(carSpeed) / 25, 1);
+  // Speed-dependent steering with grip loss at high speed
+  const speedRatio = Math.abs(carSpeed) / maxSpeed;
+  const speedFactor = Math.min(speedRatio * 1.15, 1);
+  const gripFactor = grip * (1 - speedRatio * 0.35);
   const direction = carSpeed >= 0 ? 1 : -1;
 
-  carRotation +=
-    steeringInput * spec.steering * speedFactor * direction * dt;
+  carRotation += steeringInput * spec.steering * speedFactor * gripFactor * direction * dt;
 
   const dx = Math.sin(carRotation) * carSpeed * dt;
   const dz = Math.cos(carRotation) * carSpeed * dt;
@@ -2568,16 +2566,21 @@ function updateCar(dt) {
     pedestrians: true
   });
 
-  if (!moved && Math.abs(carSpeed) > .5) {
-    carSpeed *= -.12;
+  if (!moved && Math.abs(carSpeed) > 1.2) {
+    carSpeed *= -0.18;
     showMessage("COLLISION");
   }
 
   car.rotation.y = carRotation;
 
+  // Wheel spin
   car.userData.wheels.forEach(wheel => {
-    wheel.rotation.x += carSpeed * dt * .15;
+    wheel.rotation.x += carSpeed * dt * 0.18;
   });
+
+  // Subtle body lean while turning (cheap visual)
+  const lean = -steeringInput * Math.min(Math.abs(carSpeed) * 0.008, 0.12);
+  car.rotation.z = THREE.MathUtils.lerp(car.rotation.z || 0, lean, 6 * dt);
 }
 
 /* =========================================================
@@ -2591,12 +2594,13 @@ function updateCamera(dt) {
   const target = driving ? car : player;
   const rotation = driving ? carRotation : playerRotation;
 
-  const distance = driving ? 13 : 9;
-  const height = driving ? 7 : 5;
+  const distance = driving ? 14.5 : 9.5;
+  const height = driving ? 7.2 : 5.2;
+  const lookHeight = driving ? 1.6 : 1.8;
 
   cameraTarget.set(
     target.position.x,
-    target.position.y + 2,
+    target.position.y + lookHeight,
     target.position.z
   );
 
@@ -2606,7 +2610,8 @@ function updateCamera(dt) {
     target.position.z - Math.cos(rotation) * distance
   );
 
-  const smoothing = 1 - Math.pow(.001, dt);
+  // Slightly more responsive but still smooth
+  const smoothing = 1 - Math.pow(0.0008, dt);
   camera.position.lerp(cameraPosition, smoothing);
   camera.lookAt(cameraTarget);
 }

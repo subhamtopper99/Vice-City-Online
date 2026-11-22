@@ -2373,7 +2373,7 @@ function bindMobileControl(id, name) {
     controls[name] = false;
   };
 
-  element.addEventListener("pointerup", release);
+   element.addEventListener("pointerup", release);
   element.addEventListener("pointercancel", release);
   element.addEventListener("lostpointercapture", release);
 }
@@ -2382,7 +2382,6 @@ bindMobileControl("accelerate", "accelerate");
 bindMobileControl("brake", "brake");
 bindMobileControl("left", "left");
 bindMobileControl("right", "right");
-
 /* =========================================================
    ENTER / EXIT VEHICLE
    ========================================================= */

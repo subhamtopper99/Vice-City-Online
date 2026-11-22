@@ -3012,4 +3012,3 @@ function animate() {
 updateConnection(false);
 updatePlayerCount();
 animate();
-  }

@@ -72,7 +72,7 @@ scene.background = new THREE.Color(0x91c4df);
 scene.fog = new THREE.Fog(0x87b0cc, 260, 1200);
 
 const camera = new THREE.PerspectiveCamera(
-  65, innerWidth / innerHeight, 0.1, 1200
+  65, innerWidth / innerHeight, 0.5, 1200
 );
 
 const renderer = new THREE.WebGLRenderer({
@@ -323,45 +323,119 @@ function updateSky(dt) {
 const roadLines = [];
 const buildings = [];
 
+/* Draws many identical boxes with ONE draw call (fast). */
+function makeInstancedBoxes(material, items) {
+  if (!items.length) return;
+  const mesh = new THREE.InstancedMesh(boxGeo, material, items.length);
+  const d = new THREE.Object3D();
+  items.forEach(([x, y, z, sx, sy, sz], i) => {
+    d.position.set(x, y, z);
+    d.scale.set(sx, sy, sz);
+    d.updateMatrix();
+    mesh.setMatrixAt(i, d.matrix);
+  });
+  mesh.instanceMatrix.needsUpdate = true;
+  mesh.frustumCulled = false;
+  world.add(mesh);
+}
+
 function createRoads() {
   const L = CONFIG.CITY_LIMIT;
   const S = CONFIG.ROAD_SPACING;
   const W = CONFIG.ROAD_WIDTH;
+  const SW = CONFIG.SIDEWALK_WIDTH;
 
-  for (let p = -L; p <= L; p += S) {
-    roadLines.push(p);
+  const sidewalkCenter = W / 2 + 3;          // 15
+  const sidewalkEdge = sidewalkCenter + SW / 2; // 17.5
 
+  for (let p = -L; p <= L; p += S) roadLines.push(p);
+
+  // ROAD SURFACES — both directions now use the dark road material
+  // (the east-west roads had no material, which made them render WHITE).
+  // The z-direction roads sit 0.005 lower so the intersection never z-fights.
+  for (const p of roadLines) {
     box(world, p, -.52, 0, W, .16, L * 2.1, mat.road);
-    box(world, 0, -.52, p, L * 2.1, .16, W);
+    box(world, 0, -.525, p, L * 2.1, .16, W, mat.road);
+  }
 
+  // Build segment lists BETWEEN intersections so sidewalks and lines
+  // never run across the roads that cross them.
+  const pts = [-L * 1.05, ...roadLines, L * 1.05];
+  const sidewalkSegments = [];
+  const lineSegments = [];
+
+  for (let i = 0; i < pts.length - 1; i++) {
+    const first = i === 0;
+    const last = i === pts.length - 2;
+
+    const sStart = first ? pts[0] : pts[i] + sidewalkEdge;
+    const sEnd = last ? pts[i + 1] : pts[i + 1] - sidewalkEdge;
+    sidewalkSegments.push([(sStart + sEnd) / 2, sEnd - sStart]);
+
+    const lStart = first ? pts[0] : pts[i] + W / 2;
+    const lEnd = last ? pts[i + 1] : pts[i + 1] - W / 2;
+    lineSegments.push([(lStart + lEnd) / 2, lEnd - lStart]);
+  }
+
+  const sidewalkItems = [];
+  const lineItems = [];
+
+  for (const p of roadLines) {
     for (const side of [-1, 1]) {
-      box(
-        world, p + side * (W / 2 + 3), -.38, 0,
-        CONFIG.SIDEWALK_WIDTH, .35, L * 2.1, mat.sidewalk
-      );
+      const offset = p + side * sidewalkCenter;
 
-      box(
-        world, 0, -.38, p + side * (W / 2 + 3),
-        L * 2.1, .35, CONFIG.SIDEWALK_WIDTH, mat.sidewalk
-      );
+      for (const [center, length] of sidewalkSegments) {
+        sidewalkItems.push([offset, -.38, center, SW, .35, length]);
+        sidewalkItems.push([center, -.38, offset, length, .35, SW]);
+      }
     }
 
-    box(world, p - .18, -.435, 0, .10, .03, L * 2, mat.yellow);
-    box(world, p + .18, -.435, 0, .10, .03, L * 2, mat.yellow);
-    box(world, 0, -.435, p - .18, L * 2, .03, .10, mat.yellow);
-    box(world, 0, -.435, p + .18, L * 2, .03, .10, mat.yellow);
+    for (const [center, length] of lineSegments) {
+      lineItems.push([p - .18, -.425, center, .10, .03, length]);
+      lineItems.push([p + .18, -.425, center, .10, .03, length]);
+      lineItems.push([center, -.425, p - .18, length, .03, .10]);
+      lineItems.push([center, -.425, p + .18, length, .03, .10]);
+    }
   }
-}
 
-function createCrosswalks() {
-  for (const x of roadLines) {
-    for (const z of roadLines) {
-      for (let i = -4; i <= 4; i++) {
-        box(world, x + i * 2.3, -.465, z + 17.5, 1.1, .025, 5, mat.white);
-        box(world, x + 17.5, -.465, z + i * 2.3, 5, .025, 1.1, mat.white);
+  // Square sidewalk pads on the four corners of every intersection
+  for (const p of roadLines) {
+    for (const q of roadLines) {
+      for (const sx of [-1, 1]) {
+        for (const sz of [-1, 1]) {
+          sidewalkItems.push([
+            p + sx * sidewalkCenter, -.38,
+            q + sz * sidewalkCenter,
+            SW, .35, SW
+          ]);
+        }
       }
     }
   }
+
+  makeInstancedBoxes(
+    new THREE.MeshLambertMaterial({ color: 0xb2b0a8 }),
+    sidewalkItems
+  );
+  makeInstancedBoxes(mat.yellow, lineItems);
+}
+
+function createCrosswalks() {
+  const items = [];
+
+  for (const x of roadLines) {
+    for (const z of roadLines) {
+      for (const s of [-1, 1]) {
+        for (let i = -4; i <= 4; i++) {
+          // Stripes lie ON the road surface, just before each intersection
+          items.push([x + i * 2.3, -.405, z + s * 14.8, 1.1, .02, 5]);
+          items.push([x + s * 14.8, -.405, z + i * 2.3, 5, .02, 1.1]);
+        }
+      }
+    }
+  }
+
+  makeInstancedBoxes(mat.white, items);
 }
 
 function createPark(x, z) {
@@ -2658,6 +2732,45 @@ function updateHUD(dt) {
 
 const minimap = document.getElementById("minimap");
 const mapContext = minimap ? minimap.getContext("2d") : null;
+
+/* Place the minimap in the top-right corner, just below the
+   ONLINE status and PLAYERS count. */
+function positionMinimap() {
+  if (!minimap) return;
+
+  if (minimap.parentElement !== document.body) {
+    document.body.appendChild(minimap);
+  }
+
+  let top = 12;
+  for (const element of [connectionElement, playerCountElement]) {
+    if (!element) continue;
+    const rect = element.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0 && rect.top < innerHeight / 2) {
+      top = Math.max(top, rect.bottom + 8);
+    }
+  }
+
+  const size = innerWidth < 700 ? 120 : 180;
+  const set = (name, value) => minimap.style.setProperty(name, value, "important");
+
+  set("position", "fixed");
+  set("top", top + "px");
+  set("right", "12px");
+  set("left", "auto");
+  set("bottom", "auto");
+  set("margin", "0");
+  set("transform", "none");
+  set("width", size + "px");
+  set("height", "auto");
+  set("z-index", "10000");
+  set("pointer-events", "none");
+  set("display", started ? "block" : "none");
+}
+
+window.addEventListener("resize", positionMinimap);
+setInterval(positionMinimap, 500);
+positionMinimap();
 
 function drawMinimap() {
   if (!minimap || !mapContext) return;

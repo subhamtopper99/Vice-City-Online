@@ -175,7 +175,7 @@ const pavementTexture = makeTexture("#aaa9a2", "concrete");
 pavementTexture.repeat.set(4, 25);
 
 const grassTexture = makeTexture("#477b43", "grass");
-grassTexture.repeat.set(30, 30);
+grassTexture.repeat.set(48, 48);
 
 const buildingTexture = makeTexture("#a6a092", "building");
 buildingTexture.repeat.set(1, 2);
@@ -330,8 +330,8 @@ function createRoads() {
   for (let p = -L; p <= L; p += S) {
     roadLines.push(p);
 
-    box(world, p, -.55, 0, W, .12, L * 2.1, mat.road);
-    box(world, 0, -.55, p, L * 2.1, .12, W);
+    box(world, p, -.52, 0, W, .16, L * 2.1, mat.road);
+    box(world, 0, -.52, p, L * 2.1, .16, W);
 
     for (const side of [-1, 1]) {
       box(
@@ -345,10 +345,10 @@ function createRoads() {
       );
     }
 
-    box(world, p - .18, -.475, 0, .10, .025, L * 2, mat.yellow);
-    box(world, p + .18, -.475, 0, .10, .025, L * 2, mat.yellow);
-    box(world, 0, -.475, p - .18, L * 2, .025, .10, mat.yellow);
-    box(world, 0, -.475, p + .18, L * 2, .025, .10, mat.yellow);
+    box(world, p - .18, -.435, 0, .10, .03, L * 2, mat.yellow);
+    box(world, p + .18, -.435, 0, .10, .03, L * 2, mat.yellow);
+    box(world, 0, -.435, p - .18, L * 2, .03, .10, mat.yellow);
+    box(world, 0, -.435, p + .18, L * 2, .03, .10, mat.yellow);
   }
 }
 
@@ -946,7 +946,7 @@ let engineRunning = false;
 
 function ensureVehicleAudio() {
   if (vehicleAudio) {
-         if (vehicleAudio.context.state === "suspended") {
+    if (vehicleAudio.context.state === "suspended") {
       vehicleAudio.context.resume().catch(() => {});
     }
     return vehicleAudio;
@@ -960,27 +960,56 @@ function ensureVehicleAudio() {
 
   const context = new AudioContextClass();
   const master = context.createGain();
-  master.gain.value = .42;
+  master.gain.value = 0.55;
   master.connect(context.destination);
 
+  // Low rumble (noise-based)
+  const noiseBuffer = context.createBuffer(1, context.sampleRate * 2, context.sampleRate);
+  const data = noiseBuffer.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+
+  const noise = context.createBufferSource();
+  noise.buffer = noiseBuffer;
+  noise.loop = true;
+  const noiseFilter = context.createBiquadFilter();
+  noiseFilter.type = "lowpass";
+  noiseFilter.frequency.value = 180;
+  const noiseGain = context.createGain();
+  noiseGain.gain.value = 0;
+  noise.connect(noiseFilter);
+  noiseFilter.connect(noiseGain);
+  noiseGain.connect(master);
+  noise.start();
+
+  // Main engine oscillators
   const engineGain = context.createGain();
   engineGain.gain.value = 0;
   engineGain.connect(master);
 
   const low = context.createOscillator();
+  const mid = context.createOscillator();
   const high = context.createOscillator();
   const filter = context.createBiquadFilter();
   low.type = "sawtooth";
-  high.type = "triangle";
+  mid.type = "triangle";
+  high.type = "square";
   filter.type = "lowpass";
-  filter.frequency.value = 700;
+  filter.frequency.value = 600;
+  filter.Q.value = 0.7;
+
   low.connect(filter);
+  mid.connect(filter);
   high.connect(filter);
   filter.connect(engineGain);
+
   low.start();
+  mid.start();
   high.start();
 
-  vehicleAudio = { context, master, engineGain, low, high, filter };
+  vehicleAudio = {
+    context, master, engineGain, low, mid, high, filter,
+    noise, noiseFilter, noiseGain
+  };
   return vehicleAudio;
 }
 
@@ -989,16 +1018,16 @@ function playIgnitionSound(audio) {
   const now = audio.context.currentTime;
   const osc = audio.context.createOscillator();
   const gain = audio.context.createGain();
-  osc.type = "square";
-  osc.frequency.setValueAtTime(95, now);
-  osc.frequency.exponentialRampToValueAtTime(42, now + .22);
-  gain.gain.setValueAtTime(.0001, now);
-  gain.gain.exponentialRampToValueAtTime(.22, now + .025);
-  gain.gain.exponentialRampToValueAtTime(.0001, now + .28);
+  osc.type = "sawtooth";
+  osc.frequency.setValueAtTime(120, now);
+  osc.frequency.exponentialRampToValueAtTime(55, now + 0.35);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.18, now + 0.04);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
   osc.connect(gain);
   gain.connect(audio.master);
   osc.start(now);
-  osc.stop(now + .3);
+  osc.stop(now + 0.5);
 }
 
 function setEngineRunning(running) {
@@ -1013,7 +1042,11 @@ function setEngineRunning(running) {
     }
     const now = audio.context.currentTime;
     audio.engineGain.gain.cancelScheduledValues(now);
-    audio.engineGain.gain.setTargetAtTime(engineRunning ? .48 : 0, now, .08);
+    audio.noiseGain.gain.cancelScheduledValues(now);
+    const target = engineRunning ? 0.42 : 0;
+    const noiseTarget = engineRunning ? 0.22 : 0;
+    audio.engineGain.gain.setTargetAtTime(target, now, 0.1);
+    audio.noiseGain.gain.setTargetAtTime(noiseTarget, now, 0.12);
     if (engineRunning) playIgnitionSound(audio);
   }
 
@@ -1037,34 +1070,60 @@ function playVehicleHorn() {
   const hornGain = audio.context.createGain();
   const hornA = audio.context.createOscillator();
   const hornB = audio.context.createOscillator();
+  const lfo = audio.context.createOscillator();
+  const lfoGain = audio.context.createGain();
+
   hornA.type = "square";
-  hornB.type = "triangle";
-  hornA.frequency.setValueAtTime(392, now);
-  hornB.frequency.setValueAtTime(494, now);
-  hornGain.gain.setValueAtTime(.0001, now);
-  hornGain.gain.exponentialRampToValueAtTime(.32, now + .025);
-  hornGain.gain.setValueAtTime(.32, now + .22);
-  hornGain.gain.exponentialRampToValueAtTime(.0001, now + .48);
+  hornB.type = "sawtooth";
+  hornA.frequency.setValueAtTime(380, now);
+  hornB.frequency.setValueAtTime(480, now);
+
+  // Slight modulation for a more mechanical horn
+  lfo.frequency.setValueAtTime(8, now);
+  lfoGain.gain.setValueAtTime(6, now);
+  lfo.connect(lfoGain);
+  lfoGain.connect(hornA.frequency);
+  lfoGain.connect(hornB.frequency);
+
+  hornGain.gain.setValueAtTime(0.0001, now);
+  hornGain.gain.exponentialRampToValueAtTime(0.28, now + 0.03);
+  hornGain.gain.setValueAtTime(0.28, now + 0.25);
+  hornGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
+
   hornA.connect(hornGain);
   hornB.connect(hornGain);
   hornGain.connect(audio.master);
+
   hornA.start(now);
   hornB.start(now);
-  hornA.stop(now + .5);
-  hornB.stop(now + .5);
+  lfo.start(now);
+  hornA.stop(now + 0.6);
+  hornB.stop(now + 0.6);
+  lfo.stop(now + 0.6);
 }
 
 function updateVehicleAudio() {
   if (!vehicleAudio || !engineRunning) return;
   const audio = vehicleAudio;
   const stylePitch = {
-    sport: 1, supercar: 1.28, suv: .78, sedan: .9, jeep: .68
+    sport: 1.05, supercar: 1.35, suv: 0.75, sedan: 0.88, jeep: 0.62
   }[selectedVehicleType] || 1;
-  const rpm = 58 + Math.abs(carSpeed) * 8.5 + (keys.w || controls.accelerate ? 42 : 0);
+
+  const throttle = (keys.w || controls.accelerate) ? 1 : 0;
+  const speed = Math.abs(carSpeed);
+  const baseRpm = 48 + speed * 7.2 + throttle * 38;
+  const rpm = baseRpm * stylePitch;
+
   const now = audio.context.currentTime;
-  audio.low.frequency.setTargetAtTime(rpm * stylePitch, now, .06);
-  audio.high.frequency.setTargetAtTime(rpm * stylePitch * 2.03, now, .06);
-  audio.filter.frequency.setTargetAtTime(320 + Math.abs(carSpeed) * 28, now, .08);
+  audio.low.frequency.setTargetAtTime(rpm * 0.85, now, 0.07);
+  audio.mid.frequency.setTargetAtTime(rpm * 1.6, now, 0.07);
+  audio.high.frequency.setTargetAtTime(rpm * 2.4, now, 0.07);
+  audio.filter.frequency.setTargetAtTime(280 + speed * 32 + throttle * 180, now, 0.09);
+  audio.noiseFilter.frequency.setTargetAtTime(140 + speed * 18, now, 0.1);
+
+  // Slight volume variation with throttle
+  const vol = 0.38 + throttle * 0.08 + Math.min(speed * 0.004, 0.1);
+  audio.engineGain.gain.setTargetAtTime(vol, now, 0.08);
 }
 
 const vehicleControlStyle = document.createElement("style");
@@ -2896,7 +2955,7 @@ function createBaseGround() {
     new THREE.MeshLambertMaterial({ color: 0x477b43, map: grassTexture })
   );
   ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -.78;
+  ground.position.y = -.72;
   ground.renderOrder = -2;
   world.add(ground);
 }
@@ -2922,10 +2981,10 @@ function createCentralBillboard() {
   ctx.shadowColor = "#ffb7d5";
   ctx.shadowBlur = 28;
   ctx.fillStyle = "#fff5d9";
-  ctx.font = "bold 92px Arial";
-  ctx.fillText("My love", 512, 190);
-  ctx.font = "bold 112px Arial";
-  ctx.fillText("Mayuri", 512, 330);
+  ctx.font = "bold 110px Arial";
+  ctx.fillText("My love", 512, 185);
+  ctx.font = "bold 140px Arial";
+  ctx.fillText("Mayuri", 512, 340);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -2935,18 +2994,18 @@ function createCentralBillboard() {
   const postMaterial = new THREE.MeshLambertMaterial({ color: 0x515b68 });
 
   const sign = new THREE.Mesh(
-    new THREE.PlaneGeometry(30, 15),
+    new THREE.PlaneGeometry(42, 21),
     new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide })
   );
   // The requested sign is positioned in the central map area.
-  sign.position.set(29, 15, -24);
+  sign.position.set(29, 16.5, -24);
   world.add(sign);
 
-  box(world, 29, 7.2, -24, 1.1, 14.4, 1.1, postMaterial);
-  box(world, 29, 22.7, -24, 31.2, .8, 1.2, frameMaterial);
-  box(world, 13.5, 15, -24, .8, 15.8, 1.2, frameMaterial);
-  box(world, 44.5, 15, -24, .8, 15.8, 1.2, frameMaterial);
-  box(world, 29, 7.7, -24, 12, .8, 8, frameMaterial);
+  box(world, 29, 7.8, -24, 1.2, 15.6, 1.2, postMaterial);
+  box(world, 29, 27.2, -24, 43.5, .9, 1.4, frameMaterial);
+  box(world, 7.5, 16.5, -24, .9, 22, 1.4, frameMaterial);
+  box(world, 50.5, 16.5, -24, .9, 22, 1.4, frameMaterial);
+  box(world, 29, 8.4, -24, 16, .9, 10, frameMaterial);
 }
 
 /* =========================================================

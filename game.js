@@ -5,6 +5,7 @@ import * as THREE from "https://esm.sh/three@0.160.0";
    Complete game.js
    Original Update 23 visuals preserved.
    Multiplayer connection and reconnection improvements.
+   + Two extra floating drone billboards
    ========================================================= */
 
 const CONFIG = {
@@ -799,7 +800,7 @@ function createCar(color = 0xe33b2e, style = "sport") {
     for (const x of [-1.18, 1.18]) {
       for (const z of [-1.5, 1.48]) addWheel(x, z, .43, .29);
     }
-       } else if (style === "suv") {
+  } else if (style === "suv") {
     part(0, 1.02, 0, 2.65, .78, 4.75, paint);
     part(0, 1.13, 1.52, 2.58, .42, 1.25, paint);
     part(0, 1.16, -1.68, 2.6, .42, 1.1, paint);
@@ -1784,7 +1785,7 @@ function addChatLine(name, message, system = false) {
   }
 
   chatLog.appendChild(line);
-     while (chatLog.children.length > 45) {
+  while (chatLog.children.length > 45) {
     chatLog.removeChild(chatLog.firstChild);
   }
 
@@ -2677,7 +2678,7 @@ function drawMinimap() {
   for (const p of roadLines) {
     const posX = centerX + p * scale;
     const posY = centerY + p * scale;
-         mapContext.beginPath();
+    mapContext.beginPath();
     mapContext.moveTo(posX, 0);
     mapContext.lineTo(posX, h);
     mapContext.stroke();
@@ -2951,7 +2952,7 @@ window.addEventListener("resize", () => {
 });
 
 /* =========================================================
-   BASE GRASS GROUND AND CENTRAL BILLBOARD
+   BASE GRASS GROUND AND FLOATING BILLBOARDS
    ========================================================= */
 
 function createBaseGround() {
@@ -3069,6 +3070,113 @@ function createCentralBillboard() {
   window.floatingBillboards.push(group);
 }
 
+/* ---------------------------------------------------------
+   EXTRA BILLBOARDS (added) — same look as the original sign
+   Usage: createExtraBillboard(lines, x, y, z, colors, glow)
+   --------------------------------------------------------- */
+
+function createExtraBillboard(lines, x, y, z, colors, glow) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1024;
+  canvas.height = 512;
+  const ctx = canvas.getContext("2d");
+
+  const gradient = ctx.createLinearGradient(0, 0, 1024, 512);
+  gradient.addColorStop(0, colors[0]);
+  gradient.addColorStop(0.5, colors[1]);
+  gradient.addColorStop(1, colors[2]);
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, 1024, 512);
+
+  ctx.strokeStyle = "#ffe6a6";
+  ctx.lineWidth = 22;
+  ctx.strokeRect(18, 18, 988, 476);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.shadowColor = glow;
+  ctx.shadowBlur = 32;
+  ctx.fillStyle = "#fff5d9";
+
+  // Shrink each line until it fits inside the frame
+  const step = 512 / (lines.length + 1);
+  lines.forEach((text, i) => {
+    let size = 130;
+    ctx.font = `bold ${size}px Arial`;
+    while (ctx.measureText(text).width > 900 && size > 30) {
+      size -= 4;
+      ctx.font = `bold ${size}px Arial`;
+    }
+    ctx.fillText(text, 512, step * (i + 1));
+  });
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
+
+  const frameMat = new THREE.MeshLambertMaterial({ color: 0x1e2430 });
+  const droneBodyMat = new THREE.MeshLambertMaterial({ color: 0x2a3038 });
+  const droneArmMat = new THREE.MeshLambertMaterial({ color: 0x3a424c });
+  const rotorMat = new THREE.MeshBasicMaterial({
+    color: 0x88aacc, transparent: true, opacity: 0.65
+  });
+
+  const group = new THREE.Group();
+  group.position.set(x, y, z);
+
+  group.add(new THREE.Mesh(
+    new THREE.PlaneGeometry(42, 21),
+    new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide })
+  ));
+
+  box(group, 0, 11.2, 0, 43.5, 0.9, 1.4, frameMat);
+  box(group, 0, -11.2, 0, 43.5, 0.9, 1.4, frameMat);
+  box(group, -21.5, 0, 0, 0.9, 22.5, 1.4, frameMat);
+  box(group, 21.5, 0, 0, 0.9, 22.5, 1.4, frameMat);
+
+  const drones = [];
+  for (const [dx, dy] of [[-20, 10.5], [20, 10.5], [-20, -10.5], [20, -10.5]]) {
+    const drone = new THREE.Group();
+    drone.position.set(dx, dy, 1.8);
+
+    drone.add(new THREE.Mesh(
+      new THREE.BoxGeometry(1.4, 0.45, 1.4), droneBodyMat
+    ));
+
+    for (const ax of [-0.9, 0.9]) {
+      for (const az of [-0.9, 0.9]) {
+        const arm = new THREE.Mesh(
+          new THREE.BoxGeometry(1.1, 0.12, 0.12), droneArmMat
+        );
+        arm.position.set(ax * 0.6, 0.1, az * 0.6);
+        arm.rotation.y = Math.atan2(az, ax);
+        drone.add(arm);
+      }
+    }
+
+    const rotors = [];
+    for (const [rx, rz] of [[-0.9, -0.9], [0.9, -0.9], [-0.9, 0.9], [0.9, 0.9]]) {
+      const rotor = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.55, 0.55, 0.04, 12), rotorMat
+      );
+      rotor.position.set(rx, 0.28, rz);
+      drone.add(rotor);
+      rotors.push(rotor);
+    }
+
+    drones.push({ drone, rotors });
+    group.add(drone);
+  }
+
+  group.userData.hoverTime = Math.random() * Math.PI * 2;
+  group.userData.baseY = y;
+  group.userData.drones = drones;
+
+  world.add(group);
+
+  if (!window.floatingBillboards) window.floatingBillboards = [];
+  window.floatingBillboards.push(group);
+}
+
 /* =========================================================
    BUILD WORLD AND START LOOP
    ========================================================= */
@@ -3081,6 +3189,19 @@ createWindows();
 createStreetlights();
 createPalms();
 createCentralBillboard();
+
+// Extra floating billboards
+createExtraBillboard(
+  ["I love You", "kutchu puchu"],
+  -70, 40, -100,
+  ["#2b0a3d", "#a02c6b", "#ff7a8a"], "#ff9ec7"
+);
+
+createExtraBillboard(
+  ["Welcome to My game", "future Mrs Nayak"],
+  80, 44, -100,
+  ["#0b2a4a", "#3a2c7a", "#e8a05a"], "#ffd48a"
+);
 
 createTraffic();
 createCheckpoints();
@@ -3103,7 +3224,7 @@ function animate() {
   if (window.floatingBillboards) {
     for (const bb of window.floatingBillboards) {
       bb.userData.hoverTime += dt * 1.4;
-      bb.position.y = 38 + Math.sin(bb.userData.hoverTime) * 1.6;
+      bb.position.y = (bb.userData.baseY ?? 38) + Math.sin(bb.userData.hoverTime) * 1.6;
       bb.rotation.y = Math.sin(bb.userData.hoverTime * 0.3) * 0.04;
       if (bb.userData.drones) {
         for (const d of bb.userData.drones) {

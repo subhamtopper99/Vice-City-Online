@@ -1,7 +1,7 @@
 import * as THREE from "https://esm.sh/three@0.160.0";
 
 /* =========================================================
-   VICE CITY — UPDATE 24
+   VICE CITY — UPDATE 25
    Complete game.js
    Original Update 23 visuals preserved.
    Multiplayer connection and reconnection improvements.
@@ -181,8 +181,8 @@ const buildingTexture = makeTexture("#a6a092", "building");
 buildingTexture.repeat.set(1, 2);
 
 const mat = {
-  road: new THREE.MeshLambertMaterial({
-    color: 0x30343a,
+  road: new THREE.MeshBasicMaterial({
+    color: 0xffffff,
     map: asphaltTexture
   }),
   sidewalk: new THREE.MeshLambertMaterial({ map: pavementTexture }),
@@ -207,6 +207,114 @@ scene.add(new THREE.HemisphereLight(0xcceaff, 0x596044, 2));
 const sun = new THREE.DirectionalLight(0xffedcf, 1.4);
 sun.position.set(-250, 500, 200);
 scene.add(sun);
+
+/* =========================================================
+   REALISTIC SKY, CLOUDS AND ANIMATED BIRDS
+   ========================================================= */
+
+const skyDome = new THREE.Mesh(
+  new THREE.SphereGeometry(1150, 32, 20),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    uniforms: {
+      topColor: { value: new THREE.Color(0x347fbd) },
+      horizonColor: { value: new THREE.Color(0xb9d9e9) },
+      lowerColor: { value: new THREE.Color(0xe4e4d8) }
+    },
+    vertexShader: `
+      varying vec3 vWorldPosition;
+      void main() {
+        vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+        vWorldPosition = worldPosition.xyz;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 topColor;
+      uniform vec3 horizonColor;
+      uniform vec3 lowerColor;
+      varying vec3 vWorldPosition;
+      void main() {
+        float h = normalize(vWorldPosition).y;
+        vec3 color = mix(horizonColor, topColor, smoothstep(0.02, 0.72, h));
+        color = mix(lowerColor, color, smoothstep(-0.22, 0.08, h));
+        gl_FragColor = vec4(color, 1.0);
+      }
+    `
+  })
+);
+skyDome.position.y = 0;
+scene.add(skyDome);
+
+const skyClouds = [];
+const cloudMaterial = new THREE.MeshLambertMaterial({
+  color: 0xf7fbff, transparent: true, opacity: .82,
+  depthWrite: false
+});
+
+for (let i = 0; i < 15; i++) {
+  const cloud = new THREE.Group();
+  const puffCount = 4 + Math.floor(Math.random() * 4);
+  for (let j = 0; j < puffCount; j++) {
+    const puff = new THREE.Mesh(sphereGeo, cloudMaterial);
+    puff.position.set((j - puffCount / 2) * 12, rand(-2, 2), rand(-5, 5));
+    puff.scale.set(rand(8, 15), rand(3, 6), rand(5, 9));
+    cloud.add(puff);
+  }
+  cloud.position.set(rand(-850, 850), rand(115, 190), rand(-850, 850));
+  cloud.userData.speed = rand(2, 5);
+  skyClouds.push(cloud);
+  scene.add(cloud);
+}
+
+const skyBirds = [];
+const birdMaterial = new THREE.MeshBasicMaterial({ color: 0x263746 });
+for (let i = 0; i < 12; i++) {
+  const bird = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.SphereGeometry(.55, 7, 5), birdMaterial);
+  body.scale.set(1.5, .45, .55);
+  bird.add(body);
+  const leftWing = new THREE.Group();
+  const rightWing = new THREE.Group();
+  const wingGeo = new THREE.BoxGeometry(2.2, .12, .55);
+  const leftMesh = new THREE.Mesh(wingGeo, birdMaterial);
+  const rightMesh = new THREE.Mesh(wingGeo, birdMaterial);
+  leftMesh.position.x = -1.05;
+  rightMesh.position.x = 1.05;
+  leftWing.add(leftMesh);
+  rightWing.add(rightMesh);
+  leftWing.position.x = -.55;
+  rightWing.position.x = .55;
+  bird.add(leftWing, rightWing);
+  bird.position.set(rand(-700, 700), rand(75, 130), rand(-700, 700));
+  bird.userData = {
+    leftWing, rightWing, phase: rand(0, Math.PI * 2),
+    speed: rand(12, 22), turn: rand(0, Math.PI * 2)
+  };
+  skyBirds.push(bird);
+  scene.add(bird);
+}
+
+function updateSky(dt) {
+  for (const cloud of skyClouds) {
+    cloud.position.x += cloud.userData.speed * dt;
+    if (cloud.position.x > 1000) cloud.position.x = -1000;
+  }
+  for (const bird of skyBirds) {
+    const data = bird.userData;
+    data.phase += dt * 8;
+    data.leftWing.rotation.z = Math.sin(data.phase) * .55;
+    data.rightWing.rotation.z = -Math.sin(data.phase) * .55;
+    bird.position.x += Math.cos(data.turn) * data.speed * dt;
+    bird.position.z += Math.sin(data.turn) * data.speed * dt;
+    bird.position.y += Math.sin(data.phase * .25) * .025;
+    if (Math.abs(bird.position.x) > 950 || Math.abs(bird.position.z) > 950) {
+      bird.position.set(rand(-700, 700), rand(75, 130), rand(-700, 700));
+    }
+    bird.rotation.y = -data.turn;
+  }
+}
 
 /* =========================================================
    CITY AND ROADS
@@ -240,6 +348,10 @@ function createRoads() {
 
     box(world, p - .18, -.475, 0, .10, .025, L * 2, mat.yellow);
     box(world, p + .18, -.475, 0, .10, .025, L * 2, mat.yellow);
+    box(world, 0, -.475, p - .18, L * 2, .025, .10, mat.yellow);
+    box(world, 0, -.475, p + .18, L * 2, .025, .10, mat.yellow);
+  }
+}
     box(world, 0, -.475, p - .18, L * 2, .025, .10, mat.yellow);
     box(world, 0, -.475, p + .18, L * 2, .025, .10, mat.yellow);
   }
@@ -590,7 +702,7 @@ function createNameTag(name) {
   );
 
   sprite.scale.set(6, 1.5, 1);
-  sprite.position.y = 3.65;
+     sprite.position.y = 3.65;
   sprite.userData.setName = value => {
     draw(value);
     texture.needsUpdate = true;
@@ -828,6 +940,132 @@ function showMessage(message) {
   hud.message.textContent = message;
   hud.message.style.opacity = "1";
   messageTimer = 2.2;
+}
+
+/* =========================================================
+   VEHICLE AUDIO — ENGINE AND HORN
+   ========================================================= */
+
+let vehicleAudio = null;
+let engineRunning = false;
+
+function ensureVehicleAudio() {
+  if (vehicleAudio) {
+    if (vehicleAudio.context.state === "suspended") vehicleAudio.context.resume();
+    return vehicleAudio;
+  }
+
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) {
+    showMessage("AUDIO IS NOT SUPPORTED IN THIS BROWSER");
+    return null;
+  }
+
+  const context = new AudioContextClass();
+  const master = context.createGain();
+  master.gain.value = .22;
+  master.connect(context.destination);
+
+  const engineGain = context.createGain();
+  engineGain.gain.value = 0;
+  engineGain.connect(master);
+
+  const low = context.createOscillator();
+  const high = context.createOscillator();
+  const filter = context.createBiquadFilter();
+  low.type = "sawtooth";
+  high.type = "triangle";
+  filter.type = "lowpass";
+  filter.frequency.value = 520;
+  low.connect(filter);
+  high.connect(filter);
+  filter.connect(engineGain);
+  low.start();
+  high.start();
+
+  vehicleAudio = { context, master, engineGain, low, high, filter };
+  return vehicleAudio;
+}
+
+function setEngineRunning(running) {
+  engineRunning = !!running;
+  const audio = ensureVehicleAudio();
+  if (audio) {
+    const now = audio.context.currentTime;
+    audio.engineGain.gain.cancelScheduledValues(now);
+    audio.engineGain.gain.setTargetAtTime(engineRunning ? .34 : 0, now, .12);
+  }
+  if (!engineRunning) carSpeed = 0;
+  updateVehicleButtons();
+  showMessage(engineRunning ? "ENGINE STARTED" : "ENGINE STOPPED");
+}
+
+function toggleEngine() {
+  if (!started || paused || !driving || chatOpen || garageOpen) return;
+  if (!engineRunning) ensureVehicleAudio();
+  setEngineRunning(!engineRunning);
+}
+
+function playVehicleHorn() {
+  if (!driving || !engineRunning || !started || paused) return;
+  const audio = ensureVehicleAudio();
+  if (!audio) return;
+  const now = audio.context.currentTime;
+  const horn = audio.context.createOscillator();
+  const gain = audio.context.createGain();
+  horn.type = "sawtooth";
+  horn.frequency.setValueAtTime(420, now);
+  horn.frequency.setValueAtTime(520, now + .045);
+  gain.gain.setValueAtTime(.0001, now);
+  gain.gain.exponentialRampToValueAtTime(.28, now + .025);
+  gain.gain.exponentialRampToValueAtTime(.0001, now + .32);
+  horn.connect(gain);
+  gain.connect(audio.master);
+  horn.start(now);
+  horn.stop(now + .34);
+}
+
+function updateVehicleAudio() {
+  if (!vehicleAudio || !engineRunning) return;
+  const audio = vehicleAudio;
+  const stylePitch = {
+    sport: 1, supercar: 1.28, suv: .78, sedan: .9, jeep: .68
+  }[selectedVehicleType] || 1;
+  const rpm = 58 + Math.abs(carSpeed) * 8.5 + (keys.w || controls.accelerate ? 42 : 0);
+  const now = audio.context.currentTime;
+  audio.low.frequency.setTargetAtTime(rpm * stylePitch, now, .06);
+  audio.high.frequency.setTargetAtTime(rpm * stylePitch * 2.03, now, .06);
+  audio.filter.frequency.setTargetAtTime(320 + Math.abs(carSpeed) * 28, now, .08);
+}
+
+const vehicleControlStyle = document.createElement("style");
+vehicleControlStyle.textContent = `
+#vice-vehicle-controls{position:fixed;right:22px;bottom:28px;z-index:10010;display:none;gap:9px;flex-direction:column;align-items:stretch}
+#vice-vehicle-controls button{border:1px solid rgba(255,255,255,.55);border-radius:9px;padding:12px 16px;min-width:132px;background:rgba(12,24,36,.9);color:#fff;font-weight:800;letter-spacing:.5px;cursor:pointer;box-shadow:0 4px 14px #0006}
+#vice-vehicle-controls button:active{transform:scale(.97)}
+#vice-engine-button{background:rgba(25,105,65,.95)!important}
+#vice-horn-button{background:rgba(35,75,125,.95)!important}
+@media(max-width:700px){#vice-vehicle-controls{right:12px;bottom:155px}#vice-vehicle-controls button{padding:10px 12px;min-width:112px;font-size:11px}}
+`;
+document.head.appendChild(vehicleControlStyle);
+
+const vehicleControls = document.createElement("div");
+vehicleControls.id = "vice-vehicle-controls";
+const engineButton = document.createElement("button");
+engineButton.id = "vice-engine-button";
+engineButton.type = "button";
+const hornButton = document.createElement("button");
+hornButton.id = "vice-horn-button";
+hornButton.type = "button";
+hornButton.textContent = "HORN";
+engineButton.addEventListener("click", toggleEngine);
+hornButton.addEventListener("click", playVehicleHorn);
+vehicleControls.append(engineButton, hornButton);
+document.body.appendChild(vehicleControls);
+
+function updateVehicleButtons() {
+  engineButton.textContent = engineRunning ? "STOP ENGINE" : "START ENGINE";
+  vehicleControls.style.display = driving && started && !paused ? "flex" : "none";
 }
 
 function jump() {
@@ -1164,7 +1402,7 @@ socket.on("player:assigned", data => {
   */
 
   const assignedId = typeof data === "string"
-    ? data
+       ? data
     : data?.id || data?.playerId || data?.socketId || socket.id;
 
   if (!assignedId) {
@@ -1514,7 +1752,6 @@ socket.on("chat:message", data => {
 });
 
 addChatLine("VICE CITY", "Welcome! Press ENTER to chat.", true);
-
 /* =========================================================
    ROAD HELPERS
    ========================================================= */
@@ -1793,7 +2030,6 @@ function updateTraffic(dt) {
     });
   }
 }
-
 /* =========================================================
    PEDESTRIANS — GRID-ALIGNED SIDEWALK ROUTES
    ========================================================= */
@@ -1989,6 +2225,7 @@ function updateCheckpoint() {
     }
   }
 }
+
 /* =========================================================
    INPUT AND MOBILE CONTROLS
    ========================================================= */
@@ -2010,7 +2247,6 @@ function clearControls() {
 function pressed(...names) {
   return names.some(name => keys[name]);
 }
-
 window.addEventListener("keydown", event => {
   if (chatOpen) {
     if (event.key === "Escape") {
@@ -2050,6 +2286,7 @@ window.addEventListener("keydown", event => {
   if (key === "v" && !event.repeat) toggleGarage();
   if (key === "escape" && !event.repeat) togglePause();
   if (key === "r" && !event.repeat) restartGame();
+  if (key === "h" && !event.repeat) playVehicleHorn();
 
   if (key === "c" && !event.repeat && driving) {
     const color = pick(carPaints);
@@ -2098,11 +2335,14 @@ function toggleVehicle() {
   if (!driving) {
     if (player.position.distanceTo(car.position) < 9) {
       driving = true;
+      engineRunning = false;
+      carSpeed = 0;
+      updateVehicleButtons();
       jumping = false;
       verticalVelocity = 0;
       player.position.y = 0;
       player.visible = false;
-      showMessage("VEHICLE ENTERED");
+      showMessage("VEHICLE ENTERED — PRESS START ENGINE");
     } else {
       showMessage("MOVE CLOSER TO YOUR CAR");
     }
@@ -2119,6 +2359,8 @@ function toggleVehicle() {
     }
 
     driving = false;
+    setEngineRunning(false);
+    updateVehicleButtons();
     player.visible = true;
     player.position.set(exitX, 0, exitZ);
     playerRotation = carRotation;
@@ -2186,6 +2428,11 @@ function updatePlayer(dt) {
 function updateCar(dt) {
   if (!driving) {
     carSpeed *= Math.max(0, 1 - 2.5 * dt);
+    return;
+  }
+
+  if (!engineRunning) {
+    carSpeed = 0;
     return;
   }
 
@@ -2283,6 +2530,7 @@ function updateCamera(dt) {
 
 function updateHUD(dt) {
   if (hud.speed) {
+       if (hud.speed) {
     hud.speed.textContent = Math.round(Math.abs(carSpeed) * 3.6);
   }
 
@@ -2469,6 +2717,7 @@ function startGame() {
   if (pauseScreen) pauseScreen.classList.add("hidden");
 
   showMessage("WELCOME TO VICE CITY");
+  updateVehicleButtons();
 }
 
 function togglePause() {
@@ -2480,7 +2729,12 @@ function togglePause() {
     pauseScreen.classList.toggle("hidden", !paused);
   }
 
-  if (paused) clearControls();
+  if (paused) {
+    clearControls();
+    setEngineRunning(false);
+  }
+
+  updateVehicleButtons();
 }
 
 function restartGame() {
@@ -2498,6 +2752,8 @@ function restartGame() {
   player.visible = true;
 
   driving = false;
+  setEngineRunning(false);
+  updateVehicleButtons();
   jumping = false;
   verticalVelocity = 0;
 
@@ -2541,8 +2797,7 @@ if (startButton) {
     showMessage("CONNECTING AS " + myPlayerName.toUpperCase());
   });
 }
-
-if (nameInput) {
+   if (nameInput) {
   nameInput.addEventListener("keydown", event => {
     if (event.key === "Enter" && startButton) {
       startButton.click();
@@ -2570,6 +2825,8 @@ if (menuButton) {
     closeChat();
 
     paused = false;
+    setEngineRunning(false);
+    updateVehicleButtons();
     started = false;
     requestedStart = false;
     multiplayerJoined = false;
@@ -2630,6 +2887,8 @@ function animate() {
   requestAnimationFrame(animate);
 
   const dt = Math.min(clock.getDelta(), .05);
+  updateSky(dt);
+  updateVehicleAudio();
 
   if (started && !paused) {
     if (!chatOpen && !garageOpen) {

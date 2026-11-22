@@ -2343,37 +2343,8 @@ function bindMobileControl(id, name) {
   const release = () => {
     controls[name] = false;
   };
-     if (key === "r" && !event.repeat) restartGame();
-  if (key === "h" && !event.repeat) playVehicleHorn();
 
-  if (key === "c" && !event.repeat && driving) {
-    const color = pick(carPaints);
-    car.userData.paint.color.setHex(color);
-    showMessage("NEW VEHICLE COLOUR");
-  }
-});
-
-window.addEventListener("keyup", event => {
-  keys[event.key.toLowerCase()] = false;
-});
-
-window.addEventListener("blur", clearControls);
-
-function bindMobileControl(id, name) {
-  const element = document.getElementById(id);
-  if (!element) return;
-
-  element.addEventListener("pointerdown", event => {
-    event.preventDefault();
-    controls[name] = true;
-    element.setPointerCapture?.(event.pointerId);
-  });
-
-  const release = () => {
-    controls[name] = false;
-  };
-
-   element.addEventListener("pointerup", release);
+  element.addEventListener("pointerup", release);
   element.addEventListener("pointercancel", release);
   element.addEventListener("lostpointercapture", release);
 }
@@ -2899,9 +2870,6 @@ if (menuButton) {
     clearControls();
 
     setTimeout(() => {
-      if (!socket.connected) socket.connect();
-    }, 300);
-         setTimeout(() => {
       if (!socket.connected) socket.connect();
     }, 300);
   });

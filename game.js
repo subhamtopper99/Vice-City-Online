@@ -1,7 +1,7 @@
 import * as THREE from "https://esm.sh/three@0.160.0";
 
 /* =========================================================
-   VICE CITY — UPDATE 27
+   VICE CITY — UPDATE 28
    Complete game.js
    Original Update 23 visuals preserved.
    Multiplayer connection and reconnection improvements.
@@ -132,6 +132,9 @@ canvas{touch-action:none;display:block}
 #vice-garage,#vice-chat-log{touch-action:pan-y}`;
   document.head.appendChild(style);
 })();
+
+// Start on a road intersection (the map centre is the middle of a block)
+const SPAWN = { carX: 100, carZ: 96, playerX: 100, playerZ: 106 };
 
 // Heights of each surface type (0 road, 1 curb, 2 lot grass, 3 park grass)
 const GROUND_HEIGHT = [0, .235, -.28, .29];
@@ -286,7 +289,8 @@ const buildingMaterials = [
   map: buildingTexture
 }));
 
-scene.add(new THREE.HemisphereLight(0xd8f0ff, 0x455538, 2.35));
+const hemiLight = new THREE.HemisphereLight(0xd8f0ff, 0x455538, 2.35);
+scene.add(hemiLight);
 
 const sun = new THREE.DirectionalLight(0xfff5e0, 1.75);
 sun.position.set(-250, 500, 200);
@@ -1189,7 +1193,8 @@ function createCar(color = 0xe33b2e, style = "sport", rich = false) {
 
 const player = createCharacter(STREET_BLUE, selectedGender);
 scene.add(player);
-player.position.set(0, 0, 30);
+player.rotation.order = "YXZ";   // lets the body fall over when killed
+player.position.set(SPAWN.playerX, 0, SPAWN.playerZ);
 
 const localNameTag = createNameTag("Driver");
 player.add(localNameTag);
@@ -1208,10 +1213,12 @@ function rebuildLocalCharacter(gender) {
   player.position.copy(pos);
   player.rotation.y = rot;
   player.add(localNameTag);
+  setCharacterGun(player, currentWeapon);
 }
 
 let selectedVehicleType = "sport";
 let car = createCar(VEHICLES.sport.color, selectedVehicleType, true);
+car.position.set(SPAWN.carX, 0, SPAWN.carZ);
 scene.add(car);
 
 let driving = false;
@@ -1247,6 +1254,8 @@ let playerSpeedNow = 0;
 let lastMoveSign = 1;
 let camShake = 0;
 let crashCooldown = 0;
+let embedTimer = 0;
+let stuckTimer = 0;
 let longAccSmooth = 0;
 let prevCarSpeed = 0;
 let carPitch = 0;
@@ -1389,9 +1398,14 @@ function setEngineRunning(running) {
     return;
   }
 
+  engineRunning = nextState;   // set first so an audio problem can never stop the car
   let audio = vehicleAudio;
-  if (nextState) audio = ensureVehicleAudio();
-  engineRunning = nextState;
+  try {
+    if (nextState) audio = ensureVehicleAudio();
+  } catch (error) {
+    console.warn("Audio unavailable", error);
+    audio = null;
+  }
 
   if (audio) {
     if (audio.context.state === "suspended") {
@@ -1674,11 +1688,12 @@ function spawnVehicle(type) {
   const spec = VEHICLES[type];
   car = createCar(spec.color, type, true);
 
-  car.position.set(
+  const wanted = [
     oldPosition.x + Math.sin(oldRotation) * 5,
-    0,
     oldPosition.z + Math.cos(oldRotation) * 5
-  );
+  ];
+  const free = findFreeSpot(wanted[0], wanted[1], CAR_RADIUS) || wanted;
+  car.position.set(free[0], 0, free[1]);
 
   carRotation = oldRotation;
   car.rotation.y = carRotation;
@@ -1956,6 +1971,7 @@ function addRemotePlayer(data) {
     avatar,
     vehicle,
     nameTag,
+    name: data.name || "Driver",
     gender,
     vehicleType: type,
     targetPosition: new THREE.Vector3(
@@ -2022,6 +2038,7 @@ socket.on("player:update", data => {
   remote.driving = data.driving === true;
   remote.jumping = data.jumping === true;
   remote.avatar.userData.airborne = remote.jumping;
+  if (Number.isFinite(data.weapon)) setCharacterGun(remote.avatar, data.weapon);
   remote.speed = Number.isFinite(data.speed) ? data.speed : 0;
 
   const gender = data.gender === "female" ? "female" : "male";
@@ -2077,6 +2094,7 @@ function updateRemotePlayers(dt) {
         remote.speed / 4,
         remote.speed > 11
       );
+      applyAimPose(remote.avatar);
     } else {
       remote.vehicle.userData.wheels.forEach(wheel => {
         wheel.rotation.x += remote.speed * dt * .15;
@@ -2103,6 +2121,7 @@ function sendPlayerUpdate(dt) {
     jumping: !driving && jumping,
     speed: driving ? carSpeed : playerSpeedNow,
     gender: selectedGender,
+    weapon: currentWeapon,
     vehicleType: selectedVehicleType,
     color: car.userData.paint.color.getHex()
   });
@@ -2163,7 +2182,7 @@ chatSend.textContent = "SEND";
 
 const chatHint = document.createElement("div");
 chatHint.id = "vice-chat-hint";
-chatHint.textContent = "ENTER: chat  |  ESC: close";
+chatHint.textContent = "ENTER: chat  |  T: show / hide  |  ESC: close";
 
 chatEntry.append(chatInput, chatSend);
 chatPanel.append(chatLog, chatEntry, chatHint);
@@ -2268,12 +2287,16 @@ document.head.appendChild(chatToggleStyle);
 const chatToggle = document.createElement("button");
 chatToggle.id = "vice-chat-toggle";
 chatToggle.type = "button";
-chatToggle.textContent = "CHAT";
+chatToggle.textContent = touchCapable ? "CHAT" : "CHAT [T]";
 const chatBadge = document.createElement("span");
 chatBadge.id = "vice-chat-badge";
 chatToggle.appendChild(chatBadge);
 
 let chatVisible = !touchCapable;   // hidden by default on phones
+try {
+  const savedChat = localStorage.getItem("viceChatVisible");
+  if (savedChat !== null) chatVisible = savedChat === "1";
+} catch (error) { /* storage not available */ }
 let chatUnread = 0;
 
 function updateChatBadge() {
@@ -2283,6 +2306,7 @@ function updateChatBadge() {
 
 function setChatVisible(visible) {
   chatVisible = visible;
+  try { localStorage.setItem("viceChatVisible", visible ? "1" : "0"); } catch (error) { /* ignore */ }
   chatPanel.style.display = visible ? "" : "none";
   chatToggle.classList.toggle("on", visible);
 
@@ -2332,9 +2356,10 @@ const TRAFFIC_LANE_OFFSET = 4.5;
 const SIDEWALK_OFFSET =
   ROAD_HALF + CONFIG.SIDEWALK_WIDTH / 2 + 1.5;
 
+// Roads sit at -900, -700 ... -100, 100 ... 900 (100 mod 200)
 function nearestRoadLine(value) {
   return clamp(
-    Math.round(value / CONFIG.ROAD_SPACING) * CONFIG.ROAD_SPACING,
+    Math.round((value - 100) / CONFIG.ROAD_SPACING) * CONFIG.ROAD_SPACING + 100,
     -CONFIG.CITY_LIMIT,
     CONFIG.CITY_LIMIT
   );
@@ -2427,6 +2452,7 @@ function circleHitsTraffic(x, z, radius) {
 
 function circleHitsPedestrians(x, z, radius) {
   for (const p of pedestrians) {
+    if (p.dead) continue;
     const dx = x - p.mesh.position.x;
     const dz = z - p.mesh.position.z;
     const minimum = radius + PEDESTRIAN_RADIUS;
@@ -2451,6 +2477,77 @@ function positionBlocked(x, z, radius, options = {}) {
   if (options.car && circleHitsCar(x, z, radius)) return true;
 
   return false;
+}
+
+// Finds the nearest position that is not blocked (spiral search)
+function findFreeSpot(x, z, radius) {
+  const options = { traffic: true, pedestrians: true };
+
+  for (const r of [0, 3, 6, 9, 13, 18, 24, 32, 42]) {
+    const steps = r === 0 ? 1 : 12;
+    for (let i = 0; i < steps; i++) {
+      const a = (i / steps) * Math.PI * 2;
+      const px = x + Math.cos(a) * r;
+      const pz = z + Math.sin(a) * r;
+      if (!positionBlocked(px, pz, radius, options)) return [px, pz];
+    }
+  }
+
+  return null;
+}
+
+function placeCar(x, z, heading) {
+  car.position.set(x, 0, z);
+  carRotation = heading;
+  car.rotation.set(0, heading, 0);
+  carVel.set(0, 0);
+  carSpeed = 0;
+  prevCarSpeed = 0;
+  carLateral = 0;
+}
+
+// Driving: snap the car back onto the nearest road.
+// On foot: bring the car to a free spot in front of the player.
+function recoverCar(auto = false) {
+  if (!started || paused || playerDead) return;
+
+  if (!driving) {
+    const spot = findFreeSpot(
+      player.position.x + Math.sin(playerRotation) * 6,
+      player.position.z + Math.cos(playerRotation) * 6,
+      CAR_RADIUS
+    );
+
+    if (!spot) {
+      showMessage("NO ROOM TO PLACE VEHICLE");
+      return;
+    }
+
+    placeCar(spot[0], spot[1], playerRotation);
+    showMessage("VEHICLE DELIVERED");
+    return;
+  }
+
+  const x = car.position.x, z = car.position.z;
+  const rx = nearestRoadLine(x), rz = nearestRoadLine(z);
+  const alongZ = Math.cos(carRotation) >= 0 ? 0 : Math.PI;
+  const alongX = Math.sin(carRotation) >= 0 ? Math.PI / 2 : -Math.PI / 2;
+
+  const candidates = [
+    [rx, z, alongZ, Math.abs(x - rx)],
+    [x, rz, alongX, Math.abs(z - rz)]
+  ].sort((a, b) => a[3] - b[3]);
+
+  for (const [cx, cz, heading] of candidates) {
+    const spot = findFreeSpot(cx, cz, CAR_RADIUS);
+    if (spot) {
+      placeCar(spot[0], spot[1], heading);
+      showMessage(auto ? "VEHICLE RECOVERED" : "VEHICLE RESET TO ROAD");
+      return;
+    }
+  }
+
+  showMessage("COULD NOT RESET VEHICLE");
 }
 
 function moveWithCollision(object, dx, dz, radius, options = {}) {
@@ -2590,7 +2687,7 @@ function createTraffic() {
 }
 
 // Returns true if something sits in this vehicle's lane just ahead.
-function trafficObstacleAhead(t) {
+function trafficObstacleAhead(t, ignoreOthers = false) {
   const fx = t.axis === "x" ? t.direction : 0;
   const fz = t.axis === "z" ? t.direction : 0;
   const px = t.mesh.position.x;
@@ -2606,12 +2703,15 @@ function trafficObstacleAhead(t) {
 
   if (test(car.position.x, car.position.z, 20, 3.3)) return true;
 
+  if (ignoreOthers) return false;
+
   for (const other of traffic) {
     if (other === t) continue;
     if (test(other.mesh.position.x, other.mesh.position.z, 16, 3)) return true;
   }
 
   for (const p of pedestrians) {
+    if (p.dead) continue;
     if (test(p.mesh.position.x, p.mesh.position.z, 14, 2.4)) return true;
   }
 
@@ -2623,7 +2723,19 @@ function updateTraffic(dt) {
     if (!t.cruise) t.cruise = t.speed;
 
     // Slow down for obstacles ahead, then recover to cruising speed
-    const blocked = trafficObstacleAhead(t);
+    const blocked = trafficObstacleAhead(t, t.pushThrough > 0);
+    if (t.pushThrough > 0) t.pushThrough -= dt;
+
+    // Two cars facing each other at a junction would wait forever: let one go
+    if (blocked && t.speed < 1) {
+      t.blockedTime = (t.blockedTime || 0) + dt;
+      if (t.blockedTime > 2.5) {
+        t.pushThrough = 2.5;
+        t.blockedTime = 0;
+      }
+    } else if (!blocked) {
+      t.blockedTime = 0;
+    }
     const target = blocked ? 0 : t.cruise;
     const rate = blocked ? 4 : .9;
     t.speed += (target - t.speed) * Math.min(1, rate * dt);
@@ -2726,15 +2838,23 @@ function createPedestrian() {
   const side = Math.random() > .5 ? 1 : -1;
 
   const progress = rand(-800, 800);
-  const lowerGrid = Math.floor(progress / CONFIG.ROAD_SPACING) *
-    CONFIG.ROAD_SPACING;
+  // Intersections are at 100 mod 200 (same as the roads)
+  const lowerGrid = Math.floor((progress - 100) / CONFIG.ROAD_SPACING) *
+    CONFIG.ROAD_SPACING + 100;
 
   const nextIntersection = direction > 0
     ? lowerGrid + CONFIG.ROAD_SPACING
     : lowerGrid;
 
+  person.rotation.order = "YXZ";
+
   const p = {
     mesh: person,
+    hp: 60,
+    dead: false,
+    deadTimer: 0,
+    fall: 0,
+    fleeTimer: 0,
     axis,
     road,
     direction,
@@ -2761,9 +2881,37 @@ function createPedestrian() {
   pedestrians.push(p);
 }
 
+function respawnPedestrian(p) {
+  const progress = rand(-800, 800);
+  const lower = Math.floor((progress - 100) / CONFIG.ROAD_SPACING) *
+    CONFIG.ROAD_SPACING + 100;
+
+  p.dead = false;
+  p.hp = 60;
+  p.fall = 0;
+  p.fleeTimer = 0;
+  p.mesh.rotation.x = 0;
+  p.progressRoad = progress;
+  p.mesh.position[p.axis] = progress;
+  p.nextIntersection = p.direction > 0 ? lower + CONFIG.ROAD_SPACING : lower;
+}
+
 function updatePedestrians(dt) {
   for (const p of pedestrians) {
-    p.mesh.position[p.axis] += p.speed * p.direction * dt;
+    if (p.dead) {
+      p.fall = Math.min(1, p.fall + dt * 2.2);
+      p.mesh.rotation.x = -Math.PI / 2 * p.fall;
+      p.deadTimer -= dt;
+      if (p.deadTimer <= 0) respawnPedestrian(p);
+      continue;
+    }
+
+    // Frightened pedestrians run away at sprint speed
+    const fleeing = p.fleeTimer > 0;
+    if (fleeing) p.fleeTimer -= dt;
+    const pace = p.speed * (fleeing ? 3.4 : 1);
+
+    p.mesh.position[p.axis] += pace * p.direction * dt;
 
     const coordinate = p.mesh.position[p.axis];
 
@@ -2789,7 +2937,7 @@ function updatePedestrians(dt) {
     const gy = groundHeightAt(p.mesh.position.x, p.mesh.position.z);
     p.mesh.position.y += (gy - p.mesh.position.y) * Math.min(1, 12 * dt);
 
-    animateCharacter(p.mesh, dt, true, p.speed * 1.2);
+    animateCharacter(p.mesh, dt, true, pace * 1.2, fleeing);
   }
 }
 
@@ -2826,11 +2974,17 @@ function createCheckpoints() {
       material
     );
 
-    marker.position.set(
-      Math.cos(angle) * radius,
-      3,
-      Math.sin(angle) * radius
-    );
+    let cx = Math.cos(angle) * radius;
+    let cz = Math.sin(angle) * radius;
+
+    // Snap onto the nearest road so every checkpoint can be reached
+    if (Math.abs(cx - nearestRoadLine(cx)) < Math.abs(cz - nearestRoadLine(cz))) {
+      cx = nearestRoadLine(cx);
+    } else {
+      cz = nearestRoadLine(cz);
+    }
+
+    marker.position.set(cx, 3, cz);
 
     marker.rotation.x = Math.PI / 2;
     scene.add(marker);
@@ -2872,6 +3026,7 @@ const controls = {
   right: false,
   boost: false,
   handbrake: false,
+  fire: false,
   axisX: 0,   // touch joystick: + = right
   axisY: 0    // touch joystick: + = up
 };
@@ -2929,10 +3084,18 @@ window.addEventListener("keydown", event => {
   if (key === "e" && !event.repeat) toggleVehicle();
   if (key === "v" && !event.repeat) toggleGarage();
   if (key === "escape" && !event.repeat) togglePause();
-  if (key === "r" && !event.repeat && started) restartGame();
+  if (key === "r" && !event.repeat && started) {
+    if (event.shiftKey) restartGame();   // Shift + R restarts
+    else startReload();                  // R reloads
+  }
+  if ((key === "1" || key === "2" || key === "3") && !event.repeat) {
+    selectWeapon(Number(key) - 1);
+  }
   if (key === "h" && !event.repeat) playVehicleHorn();
   if (key === "q" && !event.repeat && started) cycleQuality();
   if (key === "t" && !event.repeat && started) toggleChatPanel();
+  if (key === "g" && !event.repeat && started) cycleWeather();
+  if (key === "u" && !event.repeat && started) recoverCar(false);
 
   if (key === "c" && !event.repeat && driving) {
     const color = pick(carPaints);
@@ -3046,7 +3209,7 @@ function updatePlayer(dt) {
     return;
   }
 
-  const locked = chatOpen || garageOpen;
+  const locked = chatOpen || garageOpen || playerDead;
   const forward = !locked &&
     (pressed("w", "arrowup") || controls.accelerate || controls.axisY > .25);
   const backward = !locked &&
@@ -3116,6 +3279,7 @@ function updatePlayer(dt) {
   animateCharacter(
     player, dt, playerSpeedNow > .8, playerSpeedNow / 4, sprinting
   );
+  applyAimPose(player);
 }
 
 /* =========================================================
@@ -3125,7 +3289,7 @@ function updatePlayer(dt) {
 function updateCar(dt) {
   crashCooldown = Math.max(0, crashCooldown - dt);
   const spec = car.userData.spec;
-  const locked = chatOpen || garageOpen;
+  const locked = chatOpen || garageOpen || playerDead;
   const driver = driving && engineRunning && !locked;
 
   // Parked and still: nothing to simulate
@@ -3151,6 +3315,29 @@ function updateCar(dt) {
     );
     handbrake = !!keys[" "] || controls.handbrake;
     wantNitro = pressed("shift", "n") || controls.boost;
+  }
+
+  // Recover automatically if the car is wedged inside something
+  if (driving) {
+    embedTimer += dt;
+    if (embedTimer > .5) {
+      embedTimer = 0;
+      if (circleHitsBuilding(car.position.x, car.position.z, CAR_RADIUS - .3)) {
+        recoverCar(true);
+        return;
+      }
+    }
+
+    if (driver && throttle && Math.abs(carSpeed) < .4) {
+      stuckTimer += dt;
+      if (stuckTimer > 4) {
+        stuckTimer = 0;
+        recoverCar(true);
+        return;
+      }
+    } else {
+      stuckTimer = 0;
+    }
   }
 
   const maxBase = spec.topSpeed / 3.6;
@@ -3267,6 +3454,7 @@ function updateCar(dt) {
     showMessage("CRASH");
     playCrashSound(Math.min(1, impact / 25));
     if (touchUIActive && navigator.vibrate) navigator.vibrate(40);
+    if (impact > 10) damagePlayer(Math.min(35, (impact - 8) * 1.6), "A CRASH");
   }
 
   carSpeed = carVel.x * Math.sin(carRotation) + carVel.y * Math.cos(carRotation);
@@ -3527,9 +3715,13 @@ const TOUCH_BUTTONS = [
   { label: "HORN",   mode: "drive", size: 50, right: 152, bottom: 98,  tap: () => playVehicleHorn() },
   { id: "engine", label: "ENGINE", mode: "drive", size: 52, right: 188, bottom: 8, tap: () => toggleEngine() },
   { label: "EXIT",   mode: "drive", size: 52, right: 20,  bottom: 178, tap: () => toggleVehicle() },
+  { label: "RESET",  mode: "drive", size: 48, right: 84,  bottom: 178, tap: () => recoverCar(false) },
   { label: "JUMP",   mode: "foot",  size: 88, right: 8,   bottom: 8,   tap: () => jump(), bg: "rgba(30,110,170,.8)" },
   { label: "SPRINT", mode: "foot",  size: 68, right: 108, bottom: 8,   hold: "boost",      bg: "rgba(30,140,70,.8)" },
-  { label: "ENTER",  mode: "foot",  size: 60, right: 14,  bottom: 110, tap: () => toggleVehicle() }
+  { label: "ENTER",  mode: "foot",  size: 60, right: 14,  bottom: 110, tap: () => toggleVehicle() },
+  { label: "FIRE",   mode: "foot",  size: 72, right: 90,  bottom: 96,  hold: "fire", bg: "rgba(200,40,40,.85)" },
+  { label: "RELOAD", mode: "foot",  size: 50, right: 176, bottom: 100, tap: () => startReload() },
+  { label: "GUN",    mode: "foot",  size: 50, right: 184, bottom: 10,  tap: () => cycleWeapon(1) }
 ];
 
 let touchBuilt = false;
@@ -3658,6 +3850,7 @@ function buildTouchUI() {
   touchTop.appendChild(chatToggle);               // chat toggle moves here
   document.body.appendChild(chatPanel);          // chat becomes a floating overlay
   touchTop.appendChild(makeSys("CARS", () => toggleGarage()));
+  touchTop.appendChild(makeSys("SKY", () => cycleWeather()));
 
   if (document.fullscreenEnabled || document.webkitFullscreenEnabled) {
     touchTop.appendChild(makeSys("FULL", toggleFullscreen));
@@ -3978,10 +4171,11 @@ function togglePause() {
 }
 
 function restartGame() {
+  resetCombat();
   closeGarage();
   closeChat();
 
-  car.position.set(0, 0, 0);
+  car.position.set(SPAWN.carX, 0, SPAWN.carZ);
   carVel.set(0, 0);
   carSpeed = 0;
   stamina = STAMINA_MAX;
@@ -3995,7 +4189,7 @@ function restartGame() {
   carRotation = 0;
   car.rotation.y = 0;
 
-  player.position.set(0, 0, 30);
+  player.position.set(SPAWN.playerX, 0, SPAWN.playerZ);
   playerRotation = 0;
   player.rotation.y = 0;
   player.visible = true;
@@ -4373,6 +4567,261 @@ for (let i = 0; i < CONFIG.MAX_PEDESTRIANS; i++) {
   createPedestrian();
 }
 
+/* =========================================================
+   WEATHER — CLEAR, CLOUDY, RAIN, STORM, FOG, SUNSET  (press G)
+   ========================================================= */
+
+let fogCapNear = 260;     // limits set by the graphics quality level
+let fogCapFar = 1200;
+
+const WEATHER_PRESETS = [
+  { name: "CLEAR",  top: 0x347fbd, horizon: 0xb9d9e9, lower: 0xe4e4d8, fog: 0x87b0cc, fogNear: 260, fogFar: 1200, hemi: 2.35, sun: 1.75, sunColor: 0xfff5e0, cloud: .82, cloudColor: 0xf7fbff, rain: 0,  wet: 0,  grip: 1 },
+  { name: "CLOUDY", top: 0x6f8798, horizon: 0xaab7c0, lower: 0xc3c7c8, fog: 0x9aa8b0, fogNear: 200, fogFar: 1000, hemi: 2.0,  sun: .9,   sunColor: 0xe8ecef, cloud: 1,   cloudColor: 0xcfd6dc, rain: 0,  wet: 0,  grip: 1 },
+  { name: "RAIN",   top: 0x4a5a68, horizon: 0x78858f, lower: 0x8d9498, fog: 0x78858f, fogNear: 90,  fogFar: 650,  hemi: 1.7,  sun: .35,  sunColor: 0xc9d3da, cloud: 1,   cloudColor: 0x8a949c, rain: 1,  wet: 1,  grip: .82 },
+  { name: "STORM",  top: 0x2b3540, horizon: 0x4b5760, lower: 0x5d666c, fog: 0x4b5760, fogNear: 60,  fogFar: 480,  hemi: 1.45, sun: .2,   sunColor: 0xaab6c0, cloud: 1,   cloudColor: 0x59636b, rain: 1.6, wet: 1, grip: .74, storm: true },
+  { name: "FOG",    top: 0x9aa5ab, horizon: 0xc2c8cb, lower: 0xcfd2d2, fog: 0xbfc5c8, fogNear: 12,  fogFar: 260,  hemi: 2.1,  sun: .6,   sunColor: 0xf0f0ea, cloud: .6,  cloudColor: 0xe6e9ea, rain: 0,  wet: .2, grip: .95 },
+  { name: "SUNSET", top: 0x3b4b8a, horizon: 0xf09a5c, lower: 0xf5c88a, fog: 0xd9a077, fogNear: 200, fogFar: 1100, hemi: 1.6,  sun: 1.1,  sunColor: 0xffb070, cloud: .8,  cloudColor: 0xffc79a, rain: 0,  wet: 0,  grip: 1 }
+];
+
+const COLOR_KEYS = ["top", "horizon", "lower", "fog", "sunColor", "cloudColor"];
+const NUMBER_KEYS = ["fogNear", "fogFar", "hemi", "sun", "cloud", "rain", "wet", "grip"];
+
+function makeWeatherState(preset) {
+  const state = { name: preset.name, storm: !!preset.storm };
+  for (const key of COLOR_KEYS) state[key] = new THREE.Color(preset[key]);
+  for (const key of NUMBER_KEYS) state[key] = preset[key];
+  return state;
+}
+
+const weatherTargets = WEATHER_PRESETS.map(makeWeatherState);
+const weatherNow = makeWeatherState(WEATHER_PRESETS[0]);
+let weatherIndex = 0;
+
+const roadDryColor = new THREE.Color(0x2a2e34);
+const roadWetColor = new THREE.Color(0x14171b);
+
+/* ----- rain streaks (one cheap LineSegments object) ----- */
+const RAIN_COUNT = 700;
+const rainPositions = new Float32Array(RAIN_COUNT * 6);
+const rainLocal = new Float32Array(RAIN_COUNT * 3);
+
+for (let i = 0; i < RAIN_COUNT; i++) {
+  rainLocal[i * 3] = rand(-45, 45);
+  rainLocal[i * 3 + 1] = rand(0, 40);
+  rainLocal[i * 3 + 2] = rand(-45, 45);
+}
+
+const rainGeo = new THREE.BufferGeometry();
+rainGeo.setAttribute("position", new THREE.BufferAttribute(rainPositions, 3));
+
+const rain = new THREE.LineSegments(
+  rainGeo,
+  new THREE.LineBasicMaterial({
+    color: 0xb7c4cf, transparent: true, opacity: .5, fog: false
+  })
+);
+rain.frustumCulled = false;
+rain.visible = false;
+scene.add(rain);
+
+/* ----- sound effects shared by weather and guns ----- */
+let sfx = null;
+
+function getSfx() {
+  if (sfx) {
+    if (sfx.context.state === "suspended") sfx.context.resume().catch(() => {});
+    return sfx;
+  }
+
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return null;
+
+  try {
+    const context = new AudioContextClass();
+    const master = context.createGain();
+    master.gain.value = .6;
+    master.connect(context.destination);
+
+    const buffer = context.createBuffer(1, context.sampleRate * 2, context.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+
+    sfx = { context, master, buffer, rainGain: null };
+    return sfx;
+  } catch (error) {
+    return null;
+  }
+}
+
+function startRainSound() {
+  const audio = getSfx();
+  if (!audio || audio.rainGain) return;
+
+  const source = audio.context.createBufferSource();
+  source.buffer = audio.buffer;
+  source.loop = true;
+
+  const high = audio.context.createBiquadFilter();
+  high.type = "highpass";
+  high.frequency.value = 700;
+  const low = audio.context.createBiquadFilter();
+  low.type = "lowpass";
+  low.frequency.value = 7000;
+
+  audio.rainGain = audio.context.createGain();
+  audio.rainGain.gain.value = 0;
+
+  source.connect(high);
+  high.connect(low);
+  low.connect(audio.rainGain);
+  audio.rainGain.connect(audio.master);
+  source.start();
+}
+
+function playThunder() {
+  const audio = getSfx();
+  if (!audio) return;
+
+  const now = audio.context.currentTime;
+  const source = audio.context.createBufferSource();
+  source.buffer = audio.buffer;
+
+  const filter = audio.context.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.frequency.value = 150;
+
+  const gain = audio.context.createGain();
+  gain.gain.setValueAtTime(.0001, now);
+  gain.gain.exponentialRampToValueAtTime(.9, now + .08);
+  gain.gain.exponentialRampToValueAtTime(.0001, now + 2.6);
+
+  source.connect(filter);
+  filter.connect(gain);
+  gain.connect(audio.master);
+  source.start(now);
+  source.stop(now + 2.7);
+}
+
+let lightningTimer = 8;
+let lightningFlash = 0;
+const thunderQueue = [];
+let rainSoundTimer = 0;
+
+function cycleWeather() {
+  weatherIndex = (weatherIndex + 1) % WEATHER_PRESETS.length;
+  const next = WEATHER_PRESETS[weatherIndex];
+
+  if (next.rain > 0) startRainSound();
+  else getSfx();     // unlock audio on this user gesture
+
+  showMessage("WEATHER: " + next.name + "  (G TO CHANGE)");
+}
+
+function updateRain(dt) {
+  const amount = weatherNow.rain;
+
+  if (amount < .03) {
+    rain.visible = false;
+    return;
+  }
+
+  rain.visible = true;
+
+  const share = quality === 0 ? .4 : quality === 1 ? .7 : 1;
+  const count = Math.min(RAIN_COUNT, Math.floor(RAIN_COUNT * Math.min(1, amount) * share));
+
+  const cx = camera.position.x;
+  const cz = camera.position.z;
+  const fall = (50 + amount * 10) * dt;
+
+  for (let i = 0; i < count; i++) {
+    let y = rainLocal[i * 3 + 1] - fall;
+
+    if (y < 0) {
+      y += 40;
+      rainLocal[i * 3] = rand(-45, 45);
+      rainLocal[i * 3 + 2] = rand(-45, 45);
+    }
+    rainLocal[i * 3 + 1] = y;
+
+    const x = cx + rainLocal[i * 3];
+    const z = cz + rainLocal[i * 3 + 2];
+    const o = i * 6;
+
+    rainPositions[o] = x;
+    rainPositions[o + 1] = y;
+    rainPositions[o + 2] = z;
+    rainPositions[o + 3] = x - .12;
+    rainPositions[o + 4] = y + .95;
+    rainPositions[o + 5] = z;
+  }
+
+  rainGeo.attributes.position.needsUpdate = true;
+  rainGeo.setDrawRange(0, count * 2);
+  rain.material.opacity = Math.min(.55, .25 + amount * .2);
+}
+
+function updateWeather(dt) {
+  const target = weatherTargets[weatherIndex];
+  const k = 1 - Math.exp(-dt * 1.4);
+
+  for (const key of COLOR_KEYS) weatherNow[key].lerp(target[key], k);
+  for (const key of NUMBER_KEYS) {
+    weatherNow[key] += (target[key] - weatherNow[key]) * k;
+  }
+
+  // Lightning during storms
+  if (target.storm) {
+    lightningTimer -= dt;
+    if (lightningTimer <= 0) {
+      lightningFlash = 1;
+      lightningTimer = rand(6, 14);
+      thunderQueue.push(rand(.5, 2.4));
+    }
+  }
+
+  lightningFlash = Math.max(0, lightningFlash - dt * 3.2);
+  const flash = lightningFlash * (.65 + Math.random() * .35);
+
+  for (let i = thunderQueue.length - 1; i >= 0; i--) {
+    thunderQueue[i] -= dt;
+    if (thunderQueue[i] <= 0) {
+      thunderQueue.splice(i, 1);
+      playThunder();
+    }
+  }
+
+  const uniforms = skyDome.material.uniforms;
+  uniforms.topColor.value.copy(weatherNow.top);
+  uniforms.horizonColor.value.copy(weatherNow.horizon);
+  uniforms.lowerColor.value.copy(weatherNow.lower);
+
+  scene.background.copy(weatherNow.horizon);
+  scene.fog.color.copy(weatherNow.fog);
+  scene.fog.near = Math.min(weatherNow.fogNear, fogCapNear);
+  scene.fog.far = Math.min(weatherNow.fogFar, fogCapFar);
+
+  hemiLight.intensity = weatherNow.hemi + flash * 2.4;
+  sun.intensity = weatherNow.sun + flash * 2;
+  sun.color.copy(weatherNow.sunColor);
+
+  cloudMaterial.color.copy(weatherNow.cloudColor);
+  cloudMaterial.opacity = weatherNow.cloud;
+
+  mat.road.color.copy(roadDryColor).lerp(roadWetColor, weatherNow.wet);
+
+  updateRain(dt);
+
+  // Rain volume follows the weather (a few times per second is enough)
+  rainSoundTimer -= dt;
+  if (rainSoundTimer <= 0 && sfx && sfx.rainGain) {
+    rainSoundTimer = .25;
+    sfx.rainGain.gain.setTargetAtTime(
+      weatherNow.rain * .12, sfx.context.currentTime, .4
+    );
+  }
+}
+
 // Freeze the static city: its matrices never need recalculating
 function freezeStatic(object) {
   if (object.userData.dynamic) return;
@@ -4386,6 +4835,778 @@ world.matrixAutoUpdate = false;
 
 camera.position.set(0, 8, 15);
 camera.lookAt(0, 0, 0);
+
+/* =========================================================
+   COMBAT — GUNS, HEALTH, PICKUPS
+   ========================================================= */
+
+const WEAPONS = [
+  { id: "pistol",  name: "PISTOL",  damage: 24, rate: .28, mag: 12, reserve: 72,  range: 140, pellets: 1, spread: .012, auto: false, reload: 1.1 },
+  { id: "smg",     name: "SMG",     damage: 11, rate: .085, mag: 30, reserve: 150, range: 110, pellets: 1, spread: .04,  auto: true,  reload: 1.6 },
+  { id: "shotgun", name: "SHOTGUN", damage: 9,  rate: .9,  mag: 6,  reserve: 30,  range: 50,  pellets: 8, spread: .09,  auto: false, reload: 2.0 }
+];
+
+const ammo = WEAPONS.map(w => ({ mag: w.mag, reserve: w.reserve }));
+let currentWeapon = -1;          // -1 = gun holstered
+let fireCooldown = 0;
+let reloadTimer = 0;
+let reloading = false;
+let firePrev = false;
+
+const MAX_HP = 100;
+let hp = MAX_HP;
+let playerDead = false;
+let deathTimer = 0;
+let damageFlash = 0;
+let hitMarker = 0;
+let sinceDamage = 99;
+let spawnProtect = 0;
+let lastAttacker = "";
+let vehicleHitCooldown = 0;
+let carHitSpeed = 0;
+
+/* ---------- gun models ---------- */
+
+const gunBodyMat = new THREE.MeshLambertMaterial({ color: 0x23272e });
+const gunAccentMat = new THREE.MeshLambertMaterial({ color: 0x4a4f58 });
+
+function buildGun(index) {
+  const g = new THREE.Group();
+  const add = (x, y, z, sx, sy, sz, m) => box(g, x, y, z, sx, sy, sz, m);
+  const id = WEAPONS[index].id;
+
+  // Barrel points along +z (the group is rotated when attached to the hand)
+  if (id === "pistol") {
+    add(0, 0, .12, .07, .09, .28, gunBodyMat);
+    add(0, -.1, .03, .06, .16, .08, gunAccentMat);
+  } else if (id === "smg") {
+    add(0, 0, .2, .08, .1, .46, gunBodyMat);
+    add(0, -.13, .1, .05, .2, .07, gunAccentMat);
+    add(0, -.08, .3, .05, .14, .06, gunAccentMat);
+  } else {
+    add(0, 0, .3, .07, .08, .7, gunBodyMat);
+    add(0, -.04, .2, .09, .09, .3, gunAccentMat);
+  }
+  return g;
+}
+
+function setCharacterGun(character, index) {
+  const d = character.userData;
+  if (!d.elbows || d.gunIndex === index) return;
+
+  if (d.gun) {
+    d.elbows[1].remove(d.gun);
+    d.gun = null;
+  }
+
+  d.gunIndex = index;
+  d.armed = index >= 0 && index < WEAPONS.length;
+
+  if (d.armed) {
+    const gun = buildGun(index);
+    gun.rotation.x = Math.PI / 2;
+    gun.position.set(0, -.3, .02);
+    d.elbows[1].add(gun);
+    d.gun = gun;
+  }
+}
+
+// Raise the arms when holding a gun (called after the walk animation)
+function applyAimPose(c) {
+  const d = c.userData;
+  if (!d.arms) return;
+
+  if (d.armed && !d.airborne) {
+    d.arms[1].rotation.x = -1.45;
+    d.arms[1].rotation.z = -.2;
+    d.elbows[1].rotation.x = -.05;
+    d.arms[0].rotation.x = -1.2;
+    d.arms[0].rotation.z = .25;
+    d.elbows[0].rotation.x = -.5;
+    d.aimPoseSet = true;
+  } else if (d.aimPoseSet) {
+    d.arms[0].rotation.z = 0;
+    d.arms[1].rotation.z = 0;
+    d.aimPoseSet = false;
+  }
+}
+
+/* ---------- effects: tracers, impacts, muzzle flash ---------- */
+
+const tracerMat = new THREE.MeshBasicMaterial({
+  color: 0xffe9a0, transparent: true, opacity: .9,
+  blending: THREE.AdditiveBlending, depthWrite: false
+});
+const tracerPool = [];
+let tracerIndex = 0;
+
+for (let i = 0; i < 16; i++) {
+  const mesh = new THREE.Mesh(boxGeo, tracerMat);
+  mesh.visible = false;
+  mesh.frustumCulled = false;
+  mesh.userData.life = 0;
+  scene.add(mesh);
+  tracerPool.push(mesh);
+}
+
+function spawnTracer(ox, oy, oz, dx, dz, length) {
+  const t = tracerPool[tracerIndex++ % tracerPool.length];
+  const len = Math.max(.5, Math.min(length, 90));
+  t.position.set(ox + dx * len / 2, oy, oz + dz * len / 2);
+  t.rotation.set(0, Math.atan2(dx, dz), 0);
+  t.scale.set(.05, .05, len);
+  t.userData.life = .07;
+  t.visible = true;
+}
+
+const impactMats = {
+  spark: new THREE.MeshBasicMaterial({ color: 0xffc44d }),
+  dust: new THREE.MeshBasicMaterial({ color: 0xb8b2a6 }),
+  person: new THREE.MeshBasicMaterial({ color: 0xd9534f })
+};
+const impactPool = [];
+let impactIndex = 0;
+
+for (let i = 0; i < 12; i++) {
+  const mesh = new THREE.Mesh(sphereGeo, impactMats.dust);
+  mesh.visible = false;
+  mesh.userData.life = 0;
+  scene.add(mesh);
+  impactPool.push(mesh);
+}
+
+function spawnImpact(x, y, z, type) {
+  const m = impactPool[impactIndex++ % impactPool.length];
+  m.material = impactMats[type] || impactMats.dust;
+  m.position.set(x, y, z);
+  m.userData.life = .22;
+  m.visible = true;
+}
+
+const muzzleFlash = new THREE.Mesh(
+  sphereGeo,
+  new THREE.MeshBasicMaterial({
+    color: 0xffd36b, transparent: true, opacity: .9,
+    blending: THREE.AdditiveBlending, depthWrite: false
+  })
+);
+muzzleFlash.scale.setScalar(.3);
+muzzleFlash.visible = false;
+scene.add(muzzleFlash);
+let muzzleTimer = 0;
+
+function updateEffects(dt) {
+  for (const t of tracerPool) {
+    if (!t.visible) continue;
+    t.userData.life -= dt;
+    if (t.userData.life <= 0) t.visible = false;
+  }
+
+  for (const m of impactPool) {
+    if (!m.visible) continue;
+    m.userData.life -= dt;
+    if (m.userData.life <= 0) m.visible = false;
+    else m.scale.setScalar(.05 + .35 * (m.userData.life / .22));
+  }
+
+  if (muzzleTimer > 0) {
+    muzzleTimer -= dt;
+    if (muzzleTimer <= 0) muzzleFlash.visible = false;
+  }
+}
+
+/* ---------- sound ---------- */
+
+function playGunSound(index) {
+  const audio = getSfx();
+  if (!audio) return;
+
+  const now = audio.context.currentTime;
+  const heavy = index === 2;
+  const duration = heavy ? .28 : .14;
+
+  const source = audio.context.createBufferSource();
+  source.buffer = audio.buffer;
+  source.playbackRate.value = .8 + Math.random() * .4;
+
+  const filter = audio.context.createBiquadFilter();
+  filter.type = "bandpass";
+  filter.frequency.value = heavy ? 900 : 1700;
+  filter.Q.value = .7;
+
+  const gain = audio.context.createGain();
+  gain.gain.setValueAtTime(heavy ? .9 : .6, now);
+  gain.gain.exponentialRampToValueAtTime(.001, now + duration);
+
+  source.connect(filter);
+  filter.connect(gain);
+  gain.connect(audio.master);
+  source.start(now);
+  source.stop(now + duration + .05);
+
+  const thump = audio.context.createOscillator();
+  const thumpGain = audio.context.createGain();
+  thump.type = "sine";
+  thump.frequency.setValueAtTime(heavy ? 120 : 160, now);
+  thump.frequency.exponentialRampToValueAtTime(45, now + .12);
+  thumpGain.gain.setValueAtTime(.5, now);
+  thumpGain.gain.exponentialRampToValueAtTime(.001, now + .14);
+  thump.connect(thumpGain);
+  thumpGain.connect(audio.master);
+  thump.start(now);
+  thump.stop(now + .16);
+}
+
+/* ---------- ray casting (flat, top-down) ---------- */
+
+function rayCircle(ox, oz, dx, dz, cx, cz, r) {
+  const px = cx - ox, pz = cz - oz;
+  const along = px * dx + pz * dz;
+  if (along < 0) return -1;
+  const d2 = px * px + pz * pz - along * along;
+  if (d2 > r * r) return -1;
+  return along - Math.sqrt(r * r - d2);
+}
+
+function castRay(ox, oz, dx, dz, range) {
+  let best = range;
+  let kind = null;
+  let ref = null;
+
+  for (const b of buildings) {
+    const hw = b.width / 2, hd = b.depth / 2;
+    let tmin = 0, tmax = best;
+
+    if (Math.abs(dx) < 1e-6) {
+      if (ox < b.x - hw || ox > b.x + hw) continue;
+    } else {
+      let t1 = (b.x - hw - ox) / dx, t2 = (b.x + hw - ox) / dx;
+      if (t1 > t2) { const s = t1; t1 = t2; t2 = s; }
+      tmin = Math.max(tmin, t1);
+      tmax = Math.min(tmax, t2);
+      if (tmin > tmax) continue;
+    }
+
+    if (Math.abs(dz) < 1e-6) {
+      if (oz < b.z - hd || oz > b.z + hd) continue;
+    } else {
+      let t1 = (b.z - hd - oz) / dz, t2 = (b.z + hd - oz) / dz;
+      if (t1 > t2) { const s = t1; t1 = t2; t2 = s; }
+      tmin = Math.max(tmin, t1);
+      tmax = Math.min(tmax, t2);
+      if (tmin > tmax) continue;
+    }
+
+    if (tmin < best) {
+      best = tmin;
+      kind = "building";
+      ref = b;
+    }
+  }
+
+  for (const p of pedestrians) {
+    if (p.dead) continue;
+    const t = rayCircle(ox, oz, dx, dz, p.mesh.position.x, p.mesh.position.z, .55);
+    if (t >= 0 && t < best) { best = t; kind = "ped"; ref = p; }
+  }
+
+  for (const remote of remotePlayers.values()) {
+    const r = remote.driving ? 2 : .7;
+    const t = rayCircle(ox, oz, dx, dz, remote.root.position.x, remote.root.position.z, r);
+    if (t >= 0 && t < best) { best = t; kind = "remote"; ref = remote; }
+  }
+
+  for (const t of traffic) {
+    const hit = rayCircle(ox, oz, dx, dz, t.mesh.position.x, t.mesh.position.z, 2);
+    if (hit >= 0 && hit < best) { best = hit; kind = "car"; ref = t; }
+  }
+
+  const own = rayCircle(ox, oz, dx, dz, car.position.x, car.position.z, 2.1);
+  if (own >= 0 && own < best) { best = own; kind = "car"; ref = null; }
+
+  return kind ? { dist: best, kind, ref } : null;
+}
+
+// Gentle aim assist: snap to the closest target inside a narrow cone
+function findAimAngle(range) {
+  const px = player.position.x, pz = player.position.z;
+  let best = null, bestScore = Infinity;
+
+  const consider = (x, z) => {
+    const dx = x - px, dz = z - pz;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 1 || dist > range) return;
+
+    const angle = Math.atan2(dx, dz);
+    const diff = Math.atan2(
+      Math.sin(angle - playerRotation), Math.cos(angle - playerRotation)
+    );
+    if (Math.abs(diff) > .2) return;
+
+    const score = Math.abs(diff) * 40 + dist * .1;
+    if (score < bestScore) { bestScore = score; best = angle; }
+  };
+
+  for (const p of pedestrians) if (!p.dead) consider(p.mesh.position.x, p.mesh.position.z);
+  for (const r of remotePlayers.values()) consider(r.root.position.x, r.root.position.z);
+
+  return best;
+}
+
+/* ---------- shooting ---------- */
+
+function damagePedestrian(p, amount) {
+  if (p.dead) return;
+  p.hp -= amount;
+  p.fleeTimer = 7;
+  hitMarker = .18;
+
+  if (p.hp <= 0) {
+    p.dead = true;
+    p.deadTimer = 10;
+    p.fall = 0;
+  }
+}
+
+function playerFire() {
+  const w = WEAPONS[currentWeapon];
+  const stock = ammo[currentWeapon];
+  stock.mag--;
+  fireCooldown = w.rate;
+
+  const assist = findAimAngle(w.range);
+  const angle = assist !== null ? assist : playerRotation;
+
+  const ox = player.position.x + Math.sin(playerRotation) * .9 + Math.cos(playerRotation) * .3;
+  const oz = player.position.z + Math.cos(playerRotation) * .9 - Math.sin(playerRotation) * .3;
+  const oy = player.position.y + 1.35;
+
+  for (let i = 0; i < w.pellets; i++) {
+    const a = angle + (Math.random() - .5) * 2 * w.spread;
+    const dx = Math.sin(a), dz = Math.cos(a);
+    const hit = castRay(ox, oz, dx, dz, w.range);
+    const dist = hit ? hit.dist : w.range;
+
+    spawnTracer(ox, oy, oz, dx, dz, dist);
+    socket.emit("player:shoot", { x: ox, y: oy, z: oz, dx, dz, len: Math.min(dist, 90), weapon: currentWeapon });
+
+    if (!hit) continue;
+
+    const damage = w.damage * (1 - .6 * (dist / w.range));
+    const hx = ox + dx * dist, hz = oz + dz * dist;
+
+    if (hit.kind === "ped") {
+      damagePedestrian(hit.ref, damage);
+      spawnImpact(hx, oy, hz, "person");
+    } else if (hit.kind === "remote") {
+      hitMarker = .18;
+      socket.emit("player:hit", { targetId: hit.ref.id, damage: Math.round(damage), weapon: w.id });
+      spawnImpact(hx, oy, hz, "person");
+    } else {
+      spawnImpact(hx, oy, hz, hit.kind === "car" ? "spark" : "dust");
+    }
+  }
+
+  muzzleFlash.position.set(ox, oy, oz);
+  muzzleFlash.visible = true;
+  muzzleTimer = .05;
+
+  playGunSound(currentWeapon);
+  camShake = Math.max(camShake, w.id === "shotgun" ? .35 : .12);
+}
+
+function startReload() {
+  if (currentWeapon < 0 || reloading || playerDead || driving) return;
+
+  const w = WEAPONS[currentWeapon];
+  const stock = ammo[currentWeapon];
+  if (stock.mag >= w.mag || stock.reserve <= 0) return;
+
+  reloading = true;
+  reloadTimer = w.reload;
+  showMessage("RELOADING...");
+}
+
+function finishReload() {
+  const w = WEAPONS[currentWeapon];
+  const stock = ammo[currentWeapon];
+  if (w) {
+    const take = Math.min(w.mag - stock.mag, stock.reserve);
+    stock.mag += take;
+    stock.reserve -= take;
+  }
+  reloading = false;
+}
+
+function selectWeapon(index) {
+  if (!started || paused || driving || playerDead || chatOpen || garageOpen) return;
+
+  currentWeapon = index === currentWeapon ? -1 : index;
+  reloading = false;
+  setCharacterGun(player, currentWeapon);
+  showMessage(currentWeapon < 0 ? "GUN HOLSTERED" : WEAPONS[currentWeapon].name + " READY");
+}
+
+function cycleWeapon(direction) {
+  const order = [-1, 0, 1, 2];
+  const at = order.indexOf(currentWeapon);
+  const next = order[(at + direction + order.length) % order.length];
+
+  if (next === -1) {
+    if (currentWeapon !== -1) selectWeapon(currentWeapon);   // holster
+  } else if (next !== currentWeapon) {
+    selectWeapon(next);
+  }
+}
+
+/* ---------- health, death and respawn ---------- */
+
+function damagePlayer(amount, source = "") {
+  if (playerDead || spawnProtect > 0 || !(amount > 0)) return;
+
+  hp = Math.max(0, hp - amount);
+  damageFlash = Math.min(1, damageFlash + .35 + amount / 60);
+  sinceDamage = 0;
+  if (source) lastAttacker = source;
+  if (touchUIActive && navigator.vibrate) navigator.vibrate(30);
+
+  if (hp <= 0) killPlayer();
+}
+
+function killPlayer() {
+  playerDead = true;
+  deathTimer = 3.5;
+  reloading = false;
+  clearControls();
+  if (driving) setEngineRunning(false);
+
+  wastedText.textContent = "WASTED";
+  wastedSub.textContent = lastAttacker ? "KILLED BY " + lastAttacker : "";
+  wastedPanel.style.display = "flex";
+  socket.emit("player:died", { by: lastAttacker });
+}
+
+function resetCombat() {
+  hp = MAX_HP;
+  playerDead = false;
+  damageFlash = 0;
+  sinceDamage = 99;
+  reloading = false;
+  lastAttacker = "";
+  WEAPONS.forEach((w, i) => { ammo[i].mag = w.mag; ammo[i].reserve = w.reserve; });
+  player.rotation.x = 0;
+  if (typeof wastedPanel !== "undefined") wastedPanel.style.display = "none";
+}
+
+function respawnPlayer() {
+  resetCombat();
+  spawnProtect = 3;
+  cash = Math.floor(cash * .9);
+
+  driving = false;
+  player.visible = true;
+  placeCar(SPAWN.carX, SPAWN.carZ, 0);
+  player.position.set(SPAWN.playerX, 0, SPAWN.playerZ);
+  playerRotation = 0;
+  playerGround = 0;
+  jumpOffset = 0;
+  jumping = false;
+  updateVehicleButtons();
+  showMessage("YOU RESPAWNED — 10% OF YOUR CASH WAS LOST");
+}
+
+/* ---------- pickups ---------- */
+
+const pickups = [];
+
+function createPickups() {
+  const white = new THREE.MeshBasicMaterial({ color: 0xf4f4f4 });
+  const green = new THREE.MeshBasicMaterial({ color: 0x2ecc71 });
+  const orange = new THREE.MeshBasicMaterial({ color: 0xf1a431 });
+  const dark = new THREE.MeshBasicMaterial({ color: 0x3a2a10 });
+
+  roadLines.forEach((p, i) => {
+    roadLines.forEach((q, j) => {
+      if ((i * 3 + j * 5) % 7 !== 0) return;
+
+      const med = (i + j) % 2 === 0;
+      const group = new THREE.Group();
+      group.position.set(p + 15, 1.1, q + 15);
+
+      if (med) {
+        box(group, 0, 0, 0, .9, .65, .9, white);
+        for (const s of [-1, 1]) {
+          box(group, 0, 0, s * .46, .5, .14, .03, green);
+          box(group, 0, 0, s * .46, .14, .5, .03, green);
+        }
+      } else {
+        box(group, 0, 0, 0, .9, .6, .9, orange);
+        box(group, 0, .31, 0, .9, .05, .3, dark);
+      }
+
+      scene.add(group);
+      pickups.push({
+        group, med, active: true, timer: 0, phase: rand(0, 6.28)
+      });
+    });
+  });
+}
+
+function updatePickups(dt) {
+  const px = player.position.x, pz = player.position.z;
+  const time = performance.now() * .003;
+
+  for (const k of pickups) {
+    if (!k.active) {
+      k.timer -= dt;
+      if (k.timer <= 0) {
+        k.active = true;
+        k.group.visible = true;
+      }
+      continue;
+    }
+
+    k.group.rotation.y += dt * 1.6;
+    k.group.position.y = 1.1 + Math.sin(time + k.phase) * .15;
+
+    if (driving || playerDead) continue;
+
+    const dx = k.group.position.x - px;
+    const dz = k.group.position.z - pz;
+    if (dx * dx + dz * dz > 5.8) continue;
+
+    if (k.med) {
+      if (hp >= MAX_HP) continue;
+      hp = Math.min(MAX_HP, hp + 50);
+      showMessage("MEDKIT +50 HP");
+    } else {
+      let added = false;
+      WEAPONS.forEach((w, i) => {
+        const cap = w.reserve * 2;
+        if (ammo[i].reserve < cap) {
+          ammo[i].reserve = Math.min(cap, ammo[i].reserve + Math.ceil(w.mag * 1.5));
+          added = true;
+        }
+      });
+      if (!added) continue;
+      showMessage("AMMO COLLECTED");
+    }
+
+    k.active = false;
+    k.timer = 25;
+    k.group.visible = false;
+  }
+}
+
+/* ---------- combat HUD ---------- */
+
+const combatStyle = document.createElement("style");
+combatStyle.textContent = `
+#vice-combat{position:fixed;left:16px;bottom:16px;z-index:9000;display:none;pointer-events:none;font-family:Arial,sans-serif;color:#fff;text-shadow:0 1px 3px #000;min-width:170px}
+#vice-hp-label{display:flex;justify-content:space-between;font-size:11px;font-weight:bold;letter-spacing:1px;margin-bottom:3px}
+#vice-hp-track{height:12px;border-radius:6px;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.35);overflow:hidden}
+#vice-hp-fill{height:100%;width:100%;background:#4cd37b}
+#vice-weapon{margin-top:6px;font-size:13px;font-weight:bold;letter-spacing:.8px}
+#vice-crosshair{position:fixed;left:50%;top:50%;width:22px;height:22px;margin:-11px 0 0 -11px;z-index:9000;pointer-events:none;display:none}
+#vice-crosshair::before,#vice-crosshair::after{content:"";position:absolute;background:rgba(255,255,255,.9);box-shadow:0 0 2px #000}
+#vice-crosshair::before{left:10px;top:0;width:2px;height:22px}
+#vice-crosshair::after{top:10px;left:0;height:2px;width:22px}
+#vice-crosshair.hit::before,#vice-crosshair.hit::after{background:#ff3b30}
+#vice-damage{position:fixed;left:0;top:0;right:0;bottom:0;z-index:8999;pointer-events:none;background:radial-gradient(ellipse at center,rgba(255,0,0,0) 45%,rgba(200,0,0,.8) 100%);opacity:0}
+#vice-wasted{position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483004;display:none;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,.55);color:#e0392d;font:900 64px Arial,sans-serif;letter-spacing:6px;pointer-events:none;text-shadow:0 3px 12px #000}
+#vice-wasted small{font-size:18px;color:#fff;letter-spacing:2px;margin-top:10px}
+body.vice-touch #vice-combat{left:50%;transform:translateX(-50%);bottom:calc(10px + env(safe-area-inset-bottom,0px));min-width:150px;text-align:center}
+@media(max-width:700px){#vice-wasted{font-size:40px}}
+`;
+document.head.appendChild(combatStyle);
+
+const combatPanel = document.createElement("div");
+combatPanel.id = "vice-combat";
+combatPanel.innerHTML =
+  '<div id="vice-hp-label"><span>HEALTH</span><span id="vice-hp-text">100</span></div>' +
+  '<div id="vice-hp-track"><div id="vice-hp-fill"></div></div>' +
+  '<div id="vice-weapon"></div>';
+document.body.appendChild(combatPanel);
+
+const hpText = document.getElementById("vice-hp-text");
+const hpFill = document.getElementById("vice-hp-fill");
+const weaponText = document.getElementById("vice-weapon");
+
+const crosshair = document.createElement("div");
+crosshair.id = "vice-crosshair";
+document.body.appendChild(crosshair);
+
+const damageOverlay = document.createElement("div");
+damageOverlay.id = "vice-damage";
+document.body.appendChild(damageOverlay);
+
+const wastedPanel = document.createElement("div");
+wastedPanel.id = "vice-wasted";
+const wastedText = document.createElement("div");
+const wastedSub = document.createElement("small");
+wastedPanel.append(wastedText, wastedSub);
+document.body.appendChild(wastedPanel);
+
+let lastHpShown = -1;
+let lastWeaponLabel = "";
+let lastCrossState = "";
+
+function updateCombatHud(dt) {
+  const show = started && !paused;
+  combatPanel.style.display = show ? "block" : "none";
+
+  damageFlash = Math.max(0, damageFlash - dt * 1.4);
+  hitMarker = Math.max(0, hitMarker - dt);
+
+  if (!show) {
+    crosshair.style.display = "none";
+    damageOverlay.style.opacity = "0";
+    return;
+  }
+
+  const shownHp = Math.ceil(hp);
+  if (shownHp !== lastHpShown) {
+    lastHpShown = shownHp;
+    hpText.textContent = shownHp;
+    hpFill.style.width = Math.max(0, hp) + "%";
+    hpFill.style.background = hp > 60 ? "#4cd37b" : hp > 30 ? "#f0b429" : "#e0483a";
+  }
+
+  let label;
+  if (currentWeapon < 0) {
+    label = touchUIActive ? "UNARMED" : "UNARMED  [1-3] DRAW GUN";
+  } else {
+    const w = WEAPONS[currentWeapon];
+    label = w.name + "  " + ammo[currentWeapon].mag + " / " + ammo[currentWeapon].reserve +
+      (reloading ? "  RELOADING" : "");
+  }
+  if (label !== lastWeaponLabel) {
+    lastWeaponLabel = label;
+    weaponText.textContent = label;
+  }
+
+  const aiming = currentWeapon >= 0 && !driving && !playerDead;
+  const crossState = aiming ? (hitMarker > 0 ? "hit" : "on") : "off";
+  if (crossState !== lastCrossState) {
+    lastCrossState = crossState;
+    crosshair.style.display = aiming ? "block" : "none";
+    crosshair.classList.toggle("hit", crossState === "hit");
+  }
+
+  const lowHealth = hp < 25 && !playerDead ? .25 + Math.sin(performance.now() * .006) * .1 : 0;
+  damageOverlay.style.opacity = String(Math.min(1, Math.max(damageFlash, lowHealth)));
+}
+
+/* ---------- per-frame combat update ---------- */
+
+function updateCombat(dt) {
+  sinceDamage += dt;
+  spawnProtect = Math.max(0, spawnProtect - dt);
+  vehicleHitCooldown = Math.max(0, vehicleHitCooldown - dt);
+  fireCooldown = Math.max(0, fireCooldown - dt);
+
+  // Body falls over when dead, stands up again afterwards
+  const lying = playerDead && !driving ? -1.5 : 0;
+  player.rotation.x += (lying - player.rotation.x) * Math.min(1, dt * 8);
+
+  if (playerDead) {
+    deathTimer -= dt;
+    if (deathTimer <= 0) respawnPlayer();
+    return;
+  }
+
+  if (reloading) {
+    reloadTimer -= dt;
+    if (reloadTimer <= 0) finishReload();
+  }
+
+  // Slow health regeneration when out of trouble
+  if (sinceDamage > 10 && hp < MAX_HP) hp = Math.min(MAX_HP, hp + 2 * dt);
+
+  // Firing
+  const locked = chatOpen || garageOpen;
+  const held = !locked && (controls.fire || !!keys["f"]);
+
+  if (currentWeapon >= 0 && !driving) {
+    const w = WEAPONS[currentWeapon];
+    const wants = w.auto ? held : (held && !firePrev);
+
+    if (wants && !reloading && fireCooldown <= 0) {
+      if (ammo[currentWeapon].mag > 0) playerFire();
+      else if (ammo[currentWeapon].reserve > 0) startReload();
+      else if (!firePrev) showMessage("OUT OF AMMO");
+    }
+  }
+  firePrev = held;
+
+  // Driving into pedestrians hurts them
+  carHitSpeed = Math.max(Math.abs(carSpeed), carHitSpeed * Math.max(0, 1 - 6 * dt));
+  if (driving && carHitSpeed > 5) {
+    const reach = CAR_RADIUS + PEDESTRIAN_RADIUS + .5;
+    for (const p of pedestrians) {
+      if (p.dead) continue;
+      const dx = p.mesh.position.x - car.position.x;
+      const dz = p.mesh.position.z - car.position.z;
+      if (dx * dx + dz * dz < reach * reach) damagePedestrian(p, carHitSpeed * 6);
+    }
+  }
+
+  // Traffic running into the player on foot
+  if (!driving && vehicleHitCooldown <= 0) {
+    for (const t of traffic) {
+      const dx = t.mesh.position.x - player.position.x;
+      const dz = t.mesh.position.z - player.position.z;
+      const reach = TRAFFIC_RADIUS + PLAYER_RADIUS + .4;
+      if (t.speed > 6 && dx * dx + dz * dz < reach * reach) {
+        damagePlayer(t.speed * 1.4, "TRAFFIC");
+        vehicleHitCooldown = .8;
+        break;
+      }
+    }
+  }
+
+  updatePickups(dt);
+}
+
+// Mouse: click to shoot, wheel to change weapon
+renderer.domElement.addEventListener("pointerdown", event => {
+  if (event.pointerType === "mouse" && event.button === 0) controls.fire = true;
+});
+window.addEventListener("pointerup", event => {
+  if (event.pointerType === "mouse") controls.fire = false;
+});
+renderer.domElement.addEventListener("wheel", event => {
+  if (started && !paused && !driving && !chatOpen && !garageOpen) {
+    event.preventDefault();
+    cycleWeapon(event.deltaY > 0 ? 1 : -1);
+  }
+}, { passive: false });
+
+// Messages from other players (needs the small server relay shown in the notes)
+socket.on("player:shot", data => {
+  if (!data || ![data.x, data.y, data.z, data.dx, data.dz, data.len].every(Number.isFinite)) return;
+  spawnTracer(data.x, data.y, data.z, data.dx, data.dz, data.len);
+});
+
+function remoteNameById(id) {
+  const remote = remotePlayers.get(id);
+  return remote ? String(remote.name || "PLAYER").toUpperCase() : "ANOTHER PLAYER";
+}
+
+socket.on("player:damaged", data => {
+  if (data && Number.isFinite(data.damage)) {
+    damagePlayer(clamp(data.damage, 0, 60), remoteNameById(data.by));
+  }
+});
+
+socket.on("player:hit", data => {
+  // Fallback if the server simply relays hits to everyone
+  if (data && data.targetId && data.targetId === myPlayerId && Number.isFinite(data.damage)) {
+    damagePlayer(clamp(data.damage, 0, 60), remoteNameById(data.by));
+  }
+});
+
+createPickups();
 
 /* =========================================================
    PERFORMANCE — AUTOMATIC GRAPHICS QUALITY (LOW-END PCs)
@@ -4405,8 +5626,8 @@ function applyQuality(level) {
   camera.far = high ? 1200 : mid ? 850 : 560;
   camera.updateProjectionMatrix();
 
-  scene.fog.near = high ? 260 : mid ? 200 : 130;
-  scene.fog.far = camera.far * .95;
+  fogCapNear = high ? 260 : mid ? 200 : 130;
+  fogCapFar = camera.far * .95;
   skyDome.scale.setScalar(camera.far * .95 / 1150);
 
   for (const bird of skyBirds) bird.visible = high;
@@ -4463,6 +5684,7 @@ function animate() {
   monitorPerformance(raw);
   if (quality > 0) updateSky(dt);
   skyDome.position.set(camera.position.x, 0, camera.position.z);
+  updateWeather(dt);
 
   // Floating billboard hover + drone rotors
   if (window.floatingBillboards) {
@@ -4496,8 +5718,11 @@ function animate() {
     updateRemotePlayers(dt);
     updateCamera(dt);
 
+    updateCombat(dt);
+    updateEffects(dt);
     updateCheckpoint();
     updateHUD(dt);
+    updateCombatHud(dt);
     sendPlayerUpdate(dt);
 
     minimapTimer += dt;

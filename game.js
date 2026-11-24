@@ -1,7 +1,7 @@
 import * as THREE from "https://esm.sh/three@0.160.0";
 
 /* =========================================================
-   VICE CITY — UPDATE 29
+   VICE CITY — UPDATE 30
    Complete game.js
    Original Update 23 visuals preserved.
    Multiplayer connection and reconnection improvements.
@@ -423,17 +423,27 @@ function makeInstancedBoxes(material, items) {
   makeInstanced(boxGeo, material, items);
 }
 
+// items: [x, y, z, sx, sy, sz, colourHex?, rotationY?]
 function makeInstanced(geo, material, items) {
   if (!items.length) return;
+
   const mesh = new THREE.InstancedMesh(geo, material, items.length);
   const d = new THREE.Object3D();
-  items.forEach(([x, y, z, sx, sy, sz], i) => {
+  const tint = new THREE.Color();
+  const useColor = items.some(item => item[6] !== undefined);
+
+  items.forEach((item, i) => {
+    const [x, y, z, sx, sy, sz, color, ry] = item;
     d.position.set(x, y, z);
+    d.rotation.set(0, ry || 0, 0);
     d.scale.set(sx, sy, sz);
     d.updateMatrix();
     mesh.setMatrixAt(i, d.matrix);
+    if (useColor) mesh.setColorAt(i, tint.setHex(color !== undefined ? color : 0xffffff));
   });
+
   mesh.instanceMatrix.needsUpdate = true;
+  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   mesh.frustumCulled = false;
   world.add(mesh);
 }
@@ -549,38 +559,276 @@ function createCrosswalks() {
   makeInstancedBoxes(mat.white, items);
 }
 
+/* =========================================================
+   TREES — OAK, PINE, CYPRESS, BIRCH AND AUTUMN (all instanced)
+   ========================================================= */
+
+const TREE_SCALE = touchCapable ? .55 : 1;
+
+const treeGeo = {
+  trunk: new THREE.CylinderGeometry(.6, 1, 1, 6),
+  blob: new THREE.IcosahedronGeometry(1, 0),
+  cone: new THREE.ConeGeometry(1, 1, 7)
+};
+const treeWhite = new THREE.MeshLambertMaterial({ color: 0xffffff });
+const treeItems = { trunk: [], blob: [], cone: [] };
+
+const OAK_GREENS = [0x2f6b3a, 0x3a7d44, 0x4a8f3f, 0x2a5e35, 0x5a9a48, 0x36723a];
+const PINE_GREENS = [0x1f4d33, 0x245a3a, 0x1b4430, 0x2a6240];
+const BIRCH_GREENS = [0x7fb55a, 0x8ec166, 0x6fa84f, 0x9bc76e];
+const AUTUMN_COLORS = [0xc8782a, 0xb5532a, 0xd7a22f, 0xa8421f];
+
+function plantTree(x, z, species, size = 1) {
+  const ry = rand(0, 6.28);
+
+  if (species === "pine") {
+    const h = rand(8, 13) * size;
+    treeItems.trunk.push([x, h * .25, z, .5 * size, h * .5, .5 * size, 0x5a3e2b]);
+    const color = pick(PINE_GREENS);
+    const coneH = h * .42;
+    [3.4, 2.6, 1.7].forEach((radius, k) => {
+      treeItems.cone.push([
+        x, h * .18 + k * coneH * .55 + coneH / 2, z,
+        radius * (h / 10), coneH, radius * (h / 10), color, ry
+      ]);
+    });
+  } else if (species === "cypress") {
+    const h = rand(10, 16) * size;
+    treeItems.trunk.push([x, 1, z, .4 * size, 2, .4 * size, 0x5a3e2b]);
+    treeItems.cone.push([x, h / 2 + 1, z, 1.7 * size, h, 1.7 * size, pick(PINE_GREENS), ry]);
+  } else if (species === "birch") {
+    const h = rand(5, 7) * size;
+    treeItems.trunk.push([x, h / 2, z, .35 * size, h, .35 * size, 0xe6e2d6]);
+    const color = pick(BIRCH_GREENS);
+    const r = rand(1.9, 2.5) * size;
+    treeItems.blob.push([x, h + r * .5, z, r, r * 1.15, r, color, ry]);
+    treeItems.blob.push([x + r * .5, h - .3, z - r * .3, r * .7, r * .75, r * .7, color, ry]);
+  } else {
+    // oak (and autumn oak): three overlapping crowns
+    const h = rand(3.2, 4.4) * size;
+    treeItems.trunk.push([x, h / 2, z, .55 * size, h, .55 * size, 0x6b4a32]);
+    const palette = species === "autumn" ? AUTUMN_COLORS : OAK_GREENS;
+    const r = rand(2.6, 3.4) * size;
+    treeItems.blob.push([x, h + r * .55, z, r * 1.1, r * .9, r * 1.1, pick(palette), ry]);
+    treeItems.blob.push([x + r * .75, h + r * .2, z + r * .3, r * .8, r * .7, r * .8, pick(palette), ry]);
+    treeItems.blob.push([x - r * .6, h + r * .3, z - r * .5, r * .85, r * .75, r * .85, pick(palette), ry]);
+  }
+}
+
+function randomSpecies() {
+  const roll = Math.random();
+  if (roll < .35) return "oak";
+  if (roll < .6) return "pine";
+  if (roll < .78) return "birch";
+  if (roll < .88) return "autumn";
+  return "cypress";
+}
+
 const parkGrassItems = [];
 const parkPathItems = [];
-const parkTrunkItems = [];
-const parkCrownItems = [];
 
 function createPark(x, z) {
   parks.push({ x, z });
   parkGrassItems.push([x, -.35, z, 125, .4, 125]);
   parkPathItems.push([x, -.12, z, 8, .08, 105], [x, -.11, z, 105, .08, 8]);
 
-  for (let i = 0; i < 8; i++) {
-    const tx = x + rand(-48, 48);
-    const tz = z + rand(-48, 48);
-    parkTrunkItems.push([tx, 4, tz, 1.2, 8, 1.2]);
-    parkCrownItems.push([tx, 9, tz, 5, 5, 5]);
+  const count = Math.round(14 * TREE_SCALE + 2);
+  for (let i = 0; i < count; i++) {
+    const tx = x + rand(-55, 55);
+    const tz = z + rand(-55, 55);
+    if (Math.abs(tx - x) < 6 || Math.abs(tz - z) < 6) continue;   // keep paths clear
+    plantTree(tx, tz, randomSpecies(), rand(.85, 1.2));
   }
 }
 
+// Trees on empty lots and along the pavements
+function scatterTrees() {
+  const lotTrees = Math.round(140 * TREE_SCALE);
+  for (let i = 0, placed = 0; i < lotTrees * 4 && placed < lotTrees; i++) {
+    const x = rand(-880, 880), z = rand(-880, 880);
+    if (groundType(x, z) !== 2 || circleHitsBuilding(x, z, 7)) continue;
+    plantTree(x, z, randomSpecies(), rand(.8, 1.25));
+    placed++;
+  }
+
+  const streetTrees = Math.round(150 * TREE_SCALE);
+  for (let i = 0, placed = 0; i < streetTrees * 5 && placed < streetTrees; i++) {
+    const road = pick(roadLines);
+    const t = rand(-880, 880);
+    const side = Math.random() > .5 ? 1 : -1;
+    const alongX = Math.random() > .5;
+    const x = alongX ? t : road + side * 20.5;
+    const z = alongX ? road + side * 20.5 : t;
+
+    if (Math.abs(t - nearestRoadLine(t)) < 28) continue;      // keep junctions clear
+    if (groundType(x, z) !== 2 || circleHitsBuilding(x, z, 4)) continue;
+    plantTree(x, z, pick(["oak", "birch", "cypress", "oak"]), rand(.7, .95));
+    placed++;
+  }
+}
+
+/* =========================================================
+   BUILDINGS — TOWERS, OFFICES, APARTMENTS, WAREHOUSES, HOUSES
+   ========================================================= */
+
+const COLS = 4, ROWS = 8, CELL_W = 64, CELL_H = 32;   // one texture tile = 24 x 32 units
+
+function makeFacadeTexture(painter) {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 256;
+  painter(canvas.getContext("2d"));
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 1;
+  return texture;
+}
+
+// fn(column, row, x, y, isGroundFloor) for every window cell
+function eachCell(fn) {
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      fn(c, r, c * CELL_W, r * CELL_H, r === ROWS - 1);
+    }
+  }
+}
+
+const facadeTextures = {
+  glass: makeFacadeTexture(ctx => {
+    ctx.fillStyle = "#4f7690";
+    ctx.fillRect(0, 0, 256, 256);
+    eachCell((c, r, x, y) => {
+      const lit = Math.random() > .92;
+      const g = ctx.createLinearGradient(0, y, 0, y + CELL_H);
+      g.addColorStop(0, lit ? "#f4e3a6" : "#9cc8e0");
+      g.addColorStop(1, lit ? "#caa24e" : "#386a8a");
+      ctx.fillStyle = g;
+      ctx.fillRect(x + 2, y + 2, CELL_W - 4, CELL_H - 9);
+      ctx.fillStyle = "#2b3a46";
+      ctx.fillRect(x, y + CELL_H - 6, CELL_W, 6);
+      ctx.fillStyle = "rgba(255,255,255,.16)";
+      ctx.fillRect(x + 6, y + 4, 8, CELL_H - 14);
+    });
+    ctx.fillStyle = "#26323c";
+    for (let c = 0; c < COLS; c++) ctx.fillRect(c * CELL_W - 1, 0, 3, 256);
+  }),
+
+  brick: makeFacadeTexture(ctx => {
+    ctx.fillStyle = "#9b4f3b";
+    ctx.fillRect(0, 0, 256, 256);
+    ctx.fillStyle = "rgba(60,25,20,.35)";
+    for (let y = 0; y < 256; y += 8) {
+      ctx.fillRect(0, y, 256, 1);
+      for (let x = (y / 8 % 2) * 8; x < 256; x += 16) ctx.fillRect(x, y, 1, 8);
+    }
+    eachCell((c, r, x, y) => {
+      const lit = Math.random() > .85;
+      ctx.fillStyle = "#efe6d6";
+      ctx.fillRect(x + 14, y + 4, 36, 24);
+      ctx.fillStyle = lit ? "#e8c86a" : "#2b3b47";
+      ctx.fillRect(x + 17, y + 7, 30, 18);
+      ctx.fillStyle = "#d8cdb8";
+      ctx.fillRect(x + 12, y + 28, 40, 3);
+      if (r % 2 === 0) {
+        ctx.fillStyle = "#3a3a3a";
+        ctx.fillRect(x + 10, y + 31, 44, 1);
+      }
+    });
+  }),
+
+  industrial: makeFacadeTexture(ctx => {
+    ctx.fillStyle = "#a5adb1";
+    ctx.fillRect(0, 0, 256, 256);
+    ctx.fillStyle = "rgba(0,0,0,.13)";
+    for (let x = 0; x < 256; x += 6) ctx.fillRect(x, 0, 2, 256);
+    eachCell((c, r, x, y, ground) => {
+      if (ground && c % 2 === 1) {
+        ctx.fillStyle = "#6d7a82";
+        ctx.fillRect(x + 6, y + 4, 52, 28);
+        ctx.fillStyle = "rgba(0,0,0,.25)";
+        for (let k = 8; k < 30; k += 5) ctx.fillRect(x + 6, y + k, 52, 1);
+      }
+      if (r === 5) {
+        ctx.fillStyle = "#2d3d47";
+        ctx.fillRect(x + 8, y + 10, 48, 9);
+      }
+    });
+  }),
+
+  house: makeFacadeTexture(ctx => {
+    ctx.fillStyle = "#eadfca";
+    ctx.fillRect(0, 0, 256, 256);
+    ctx.fillStyle = "rgba(110,95,70,.07)";
+    for (let i = 0; i < 400; i++) ctx.fillRect(rand(0, 256), rand(0, 256), 3, 2);
+    eachCell((c, r, x, y, ground) => {
+      if (ground && c === 1) {
+        ctx.fillStyle = "#6a4a35";
+        ctx.fillRect(x + 20, y + 4, 24, 28);
+        ctx.fillStyle = "#d8b24a";
+        ctx.fillRect(x + 38, y + 18, 3, 3);
+        return;
+      }
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(x + 10, y + 5, 44, 22);
+      ctx.fillStyle = Math.random() > .8 ? "#e8c86a" : "#2f4352";
+      ctx.fillRect(x + 13, y + 8, 38, 16);
+      ctx.fillStyle = "#6c8a5a";
+      ctx.fillRect(x + 6, y + 5, 4, 22);
+      ctx.fillRect(x + 54, y + 5, 4, 22);
+    });
+  }),
+
+  modern: makeFacadeTexture(ctx => {
+    ctx.fillStyle = "#c9c6bf";
+    ctx.fillRect(0, 0, 256, 256);
+    for (let r = 0; r < ROWS; r++) {
+      const g = ctx.createLinearGradient(0, r * CELL_H, 0, r * CELL_H + 16);
+      g.addColorStop(0, "#5f8ea5");
+      g.addColorStop(1, "#26424f");
+      ctx.fillStyle = g;
+      ctx.fillRect(4, r * CELL_H + 8, 248, 15);
+      ctx.fillStyle = "#a9a69f";
+      ctx.fillRect(0, r * CELL_H + CELL_H - 3, 256, 3);
+    }
+    ctx.fillStyle = "#9d9a93";
+    for (let c = 0; c < COLS; c++) ctx.fillRect(c * CELL_W - 2, 0, 4, 256);
+  })
+};
+
+function tintedMaterials(texture, tints) {
+  return tints.map(color => new THREE.MeshLambertMaterial({ color, map: texture }));
+}
+
+const facadeMats = {
+  office: buildingMaterials,
+  glass: tintedMaterials(facadeTextures.glass, [0xffffff, 0xcfe6f2, 0xb8d4c8, 0xd9d2f0]),
+  brick: tintedMaterials(facadeTextures.brick, [0xffffff, 0xe0b8a0, 0xc79a86]),
+  industrial: tintedMaterials(facadeTextures.industrial, [0xffffff, 0xcfd6d9, 0xd9cfa6]),
+  house: tintedMaterials(facadeTextures.house, [0xffffff, 0xf3e3c5, 0xd7e6c7, 0xe6c6c6, 0xc7d8e6]),
+  modern: tintedMaterials(facadeTextures.modern, [0xffffff, 0xe6e2dc, 0xd0d4d8])
+};
+
 const roofMaterial = new THREE.MeshLambertMaterial({ color: 0x66696b });
 const roofDetailMaterial = new THREE.MeshLambertMaterial({ color: 0x8c9094 });
+const chimneyMaterial = new THREE.MeshLambertMaterial({ color: 0x8a4b3a });
+const gableMaterials = [0xa4533a, 0x4a5560, 0x6b4a36, 0x55695a].map(
+  color => new THREE.MeshLambertMaterial({ color })
+);
 
-// Every building is added to one big mesh per material (2 - 9 draw calls
-// for the whole city instead of one per building).
-const buildingBatches = new Map();
-const roofBatch = { positions: [], normals: [], uvs: [], indices: [], count: 0 };
+const wallBatches = new Map();    // material -> merged geometry data
+const roofBatches = new Map();
 const roofDetailItems = [];
+const tankItems = [];
+const chimneyItems = [];
 
-function batchFor(material) {
-  if (!buildingBatches.has(material)) {
-    buildingBatches.set(material, { positions: [], normals: [], uvs: [], indices: [], count: 0 });
-  }
-  return buildingBatches.get(material);
+function newBatch() {
+  return { positions: [], normals: [], uvs: [], indices: [], count: 0 };
+}
+
+function batchIn(map, material) {
+  if (!map.has(material)) map.set(material, newBatch());
+  return map.get(material);
 }
 
 // Copies some faces of a BoxGeometry into a batch, moved to (ox, oy, oz)
@@ -607,12 +855,49 @@ function addFaces(batch, geo, faces, ox, oy, oz) {
   }
 }
 
-function createBuilding(x, z, w, d, h, material) {
-  // Snap sizes so whole window columns and floors fit the facade texture.
-  w = Math.max(18, Math.round(w / 6) * 6);
-  d = Math.max(18, Math.round(d / 6) * 6);
-  h = Math.max(12, Math.round(h / 4) * 4);
+// Copies one material group of any indexed geometry (used for cylinders)
+function addGroup(batch, geo, groupIndex, ox, oy, oz) {
+  const pos = geo.attributes.position;
+  const nor = geo.attributes.normal;
+  const uv = geo.attributes.uv;
+  const index = geo.index.array;
+  const group = geo.groups[groupIndex];
+  const base = batch.count;
 
+  for (let v = 0; v < pos.count; v++) {
+    batch.positions.push(pos.getX(v) + ox, pos.getY(v) + oy, pos.getZ(v) + oz);
+    batch.normals.push(nor.getX(v), nor.getY(v), nor.getZ(v));
+    batch.uvs.push(uv.getX(v), uv.getY(v));
+  }
+
+  for (let k = group.start; k < group.start + group.count; k++) {
+    batch.indices.push(index[k] + base);
+  }
+
+  batch.count += pos.count;
+}
+
+// Copies a non-indexed geometry (used for pitched roofs)
+function addFlat(batch, geo, ox, oy, oz) {
+  const pos = geo.attributes.position;
+  const nor = geo.attributes.normal;
+  const base = batch.count;
+
+  for (let v = 0; v < pos.count; v++) {
+    batch.positions.push(pos.getX(v) + ox, pos.getY(v) + oy, pos.getZ(v) + oz);
+    batch.normals.push(nor.getX(v), nor.getY(v), nor.getZ(v));
+    batch.uvs.push(0, 0);
+    batch.indices.push(base + v);
+  }
+
+  batch.count += pos.count;
+}
+
+const snap4 = v => Math.max(4, Math.round(v / 4) * 4);
+const snap6 = v => Math.max(12, Math.round(v / 6) * 6);
+
+// A plain box with a flat roof
+function addMass(material, x, z, w, d, y0, h, roofMat = roofMaterial) {
   const geo = new THREE.BoxGeometry(w, h, d);
   const uv = geo.attributes.uv;
 
@@ -622,28 +907,159 @@ function createBuilding(x, z, w, d, h, material) {
     uv.setXY(i, uv.getX(i) * horizontal / 24, uv.getY(i) * h / 32);
   }
 
-  const centerY = h / 2 - .25;
-  addFaces(batchFor(material), geo, [0, 1, 4, 5], x, centerY, z);   // walls
-  addFaces(roofBatch, geo, [2], x, centerY, z);                     // roof
+  addFaces(batchIn(wallBatches, material), geo, [0, 1, 4, 5], x, y0 + h / 2, z);
+  if (roofMat) addFaces(batchIn(roofBatches, roofMat), geo, [2], x, y0 + h / 2, z);
   geo.dispose();
+}
 
+// A round tower
+function addRoundMass(material, x, z, r, y0, h) {
+  const geo = new THREE.CylinderGeometry(r, r, h, 20, 1);
+  const uv = geo.attributes.uv;
+  const tiles = Math.max(1, Math.round(Math.PI * 2 * r / 24));
+
+  for (let i = 0; i < uv.count; i++) {
+    uv.setXY(i, uv.getX(i) * tiles, uv.getY(i) * h / 32);
+  }
+
+  addGroup(batchIn(wallBatches, material), geo, 0, x, y0 + h / 2, z);
+  addGroup(batchIn(roofBatches, roofMaterial), geo, 1, x, y0 + h / 2, z);
+  geo.dispose();
+}
+
+// A pitched roof (ridge runs along the longer side)
+function addGable(x, y, z, w, d, rise, roofMat) {
+  const alongZ = d >= w;
+  const a = alongZ ? w : d;
+  const b = alongZ ? d : w;
+  const hw = a / 2 + .5, hd = b / 2 + .4;
+  const v = [];
+  const tri = (p, q, r) => v.push(...p, ...q, ...r);
+  const quad = (p, q, r, s) => { tri(p, q, r); tri(p, r, s); };
+
+  quad([-hw, 0, -hd], [-hw, 0, hd], [0, rise, hd], [0, rise, -hd]);
+  quad([hw, 0, hd], [hw, 0, -hd], [0, rise, -hd], [0, rise, hd]);
+  tri([-hw, 0, hd], [hw, 0, hd], [0, rise, hd]);
+  tri([hw, 0, -hd], [-hw, 0, -hd], [0, rise, -hd]);
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(v, 3));
+  geo.computeVertexNormals();
+  if (!alongZ) geo.rotateY(Math.PI / 2);
+
+  addFlat(batchIn(roofBatches, roofMat), geo, x, y, z);
+  geo.dispose();
+}
+
+function pickFacade(kind) {
+  return pick(facadeMats[kind]);
+}
+
+function roofClutter(x, z, w, d, roofY, antenna = false) {
+  const units = 1 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < units; i++) {
+    roofDetailItems.push([
+      x + rand(-w * .3, w * .3), roofY + .9, z + rand(-d * .3, d * .3),
+      rand(2.5, 4.5), 1.8, rand(2.5, 4.5)
+    ]);
+  }
+  if (antenna) roofDetailItems.push([x, roofY + 7, z, .5, 14, .5]);
+}
+
+/* ----- the building types ----- */
+
+// Tall glass / modern tower with stepped upper levels and a spire
+function buildTower(x, z, w, d, h) {
+  const material = pickFacade(Math.random() < .65 ? "glass" : "modern");
+  const tiers = Math.random() < .55 ? 3 : 2;
+  let cw = snap6(w), cd = snap6(d), y0 = -.25;
+  let total = snap4(h);
+
+  const first = snap4(total * (tiers === 3 ? .5 : .65));
+  addMass(material, x, z, cw, cd, y0, first);
+  buildings.push({ x, z, width: cw, depth: cd, height: total });
+  y0 += first;
+
+  cw = snap6(cw * .72); cd = snap6(cd * .72);
+  const second = snap4((total - first) * (tiers === 3 ? .55 : 1));
+  addMass(material, x, z, cw, cd, y0, second);
+  y0 += second;
+
+  if (tiers === 3) {
+    cw = snap6(cw * .7); cd = snap6(cd * .7);
+    const third = snap4(total - first - second);
+    addMass(material, x, z, cw, cd, y0, third);
+    y0 += third;
+  }
+
+  roofClutter(x, z, cw, cd, y0, true);
+}
+
+// Round glass tower
+function buildRoundTower(x, z, r, h) {
+  const material = pickFacade("glass");
+  const height = snap4(h);
+  addRoundMass(material, x, z, r, -.25, height);
+  buildings.push({ x, z, width: r * 2, depth: r * 2, height });
+  roofClutter(x, z, r, r, height - .25, Math.random() > .5);
+}
+
+// Office block, sometimes with a lower wing
+function buildOffice(x, z, w, d, h) {
+  const material = pickFacade(Math.random() < .6 ? "office" : "modern");
+  w = snap6(w); d = snap6(d); h = snap4(h);
+
+  addMass(material, x, z, w, d, -.25, h);
+  buildings.push({ x, z, width: w, depth: d, height: h });
+
+  if (Math.random() < .4) {
+    const ww = snap6(w * .5), wd = snap6(d * .7), wh = snap4(h * .45);
+    const wx = x + w / 2 + ww / 2;
+    addMass(material, wx, z, ww, wd, -.25, wh);
+    buildings.push({ x: wx, z, width: ww, depth: wd, height: wh });
+    roofClutter(wx, z, ww, wd, wh - .25);
+  }
+
+  roofClutter(x, z, w, d, h - .25, h > 70);
+}
+
+// Brick apartment block with a rooftop water tank
+function buildApartment(x, z, w, d, h) {
+  const material = pickFacade("brick");
+  w = snap6(w); d = snap6(d); h = snap4(h);
+
+  addMass(material, x, z, w, d, -.25, h);
   buildings.push({ x, z, width: w, depth: d, height: h });
 
   const roofY = h - .25;
+  tankItems.push([x + rand(-w * .25, w * .25), roofY + 2.4, z + rand(-d * .25, d * .25), 2, 4.4, 2]);
+  roofClutter(x, z, w, d, roofY);
+}
 
-  if (h > 28) {
-    const units = 1 + Math.floor(Math.random() * 3);
-    for (let i = 0; i < units; i++) {
-      roofDetailItems.push([
-        x + rand(-w * .3, w * .3), roofY + .9, z + rand(-d * .3, d * .3),
-        rand(2.5, 4.5), 1.8, rand(2.5, 4.5)
-      ]);
-    }
-  }
+// Low warehouse with a shallow pitched roof
+function buildWarehouse(x, z, w, d, h) {
+  const material = pickFacade("industrial");
+  w = snap6(w); d = snap6(d); h = snap4(h);
 
-  if (h > 100 && Math.random() > .4) {
-    roofDetailItems.push([x, roofY + 6, z, .5, 12, .5]);   // antenna
-  }
+  addMass(material, x, z, w, d, -.25, h, null);
+  addGable(x, h - .25, z, w, d, 2.8, pick(gableMaterials));
+  buildings.push({ x, z, width: w, depth: d, height: h + 3 });
+}
+
+// Small house with a pitched roof and chimney
+function buildHouse(x, z, w, d, h) {
+  const material = pickFacade("house");
+  w = snap6(w); d = snap6(d); h = snap4(h);
+
+  addMass(material, x, z, w, d, -.25, h, null);
+  const rise = Math.min(w, d) * .32;
+  addGable(x, h - .25, z, w, d, rise, pick(gableMaterials));
+  buildings.push({ x, z, width: w, depth: d, height: h + rise });
+
+  chimneyItems.push([
+    x + rand(-w * .25, w * .25), h + rise * .55, z + rand(-d * .2, d * .2),
+    1.2, rise + 2.2, 1.2
+  ]);
 }
 
 function flushCity() {
@@ -662,14 +1078,41 @@ function flushCity() {
     world.add(new THREE.Mesh(geo, material));
   };
 
-  for (const [material, batch] of buildingBatches) build(batch, material);
-  build(roofBatch, roofMaterial);
+  for (const [material, batch] of wallBatches) build(batch, material);
+  for (const [material, batch] of roofBatches) build(batch, material);
 
   makeInstancedBoxes(roofDetailMaterial, roofDetailItems);
+  makeInstancedBoxes(chimneyMaterial, chimneyItems);
+  makeInstanced(cylinderGeo, roofDetailMaterial, tankItems);
+
   makeInstancedBoxes(mat.grass, parkGrassItems);
   makeInstancedBoxes(mat.sidewalk, parkPathItems);
-  makeInstanced(cylinderGeo, mat.trunk, parkTrunkItems);
-  makeInstanced(sphereGeo, mat.tree, parkCrownItems);
+
+  makeInstanced(treeGeo.trunk, treeWhite, treeItems.trunk);
+  makeInstanced(treeGeo.blob, treeWhite, treeItems.blob);
+  makeInstanced(treeGeo.cone, treeWhite, treeItems.cone);
+}
+
+// Picks a building type for a lot depending on how far it is from the centre
+function chooseBuilding(distance) {
+  const roll = Math.random();
+
+  if (distance < 300) {                       // downtown
+    if (roll < .55) return { type: "tower", w: rand(36, 56), d: rand(36, 56), h: rand(100, 210) };
+    if (roll < .72) { const r = rand(15, 22); return { type: "round", w: r * 2, d: r * 2, r, h: rand(90, 170) }; }
+    return { type: "office", w: rand(34, 56), d: rand(34, 56), h: rand(60, 120) };
+  }
+
+  if (distance < 600) {                       // mid-town
+    if (roll < .4) return { type: "office", w: rand(30, 56), d: rand(30, 56), h: rand(40, 90) };
+    if (roll < .8) return { type: "apartment", w: rand(30, 54), d: rand(24, 36), h: rand(20, 44) };
+    return { type: "tower", w: rand(30, 44), d: rand(30, 44), h: rand(60, 100) };
+  }
+
+  if (roll < .5) return { type: "house", w: rand(18, 30), d: rand(18, 28), h: rand(8, 12) };
+  if (roll < .72) return { type: "apartment", w: rand(30, 48), d: rand(24, 32), h: rand(16, 32) };
+  if (roll < .92) return { type: "warehouse", w: rand(42, 66), d: rand(30, 48), h: rand(8, 16) };
+  return { type: "office", w: rand(30, 48), d: rand(30, 48), h: rand(24, 50) };
 }
 
 function createCity() {
@@ -687,21 +1130,41 @@ function createCity() {
         continue;
       }
 
-      const downtown = Math.abs(gx) < 300 && Math.abs(gz) < 300;
+      const distance = Math.max(Math.abs(gx), Math.abs(gz));
+      const wanted = distance < 300 ? 3 : distance < 600 ? 2 : 4;
+      const placed = [];
 
-      for (let i = 0; i < (downtown ? 3 : 2); i++) {
-        createBuilding(
-          gx + rand(-48, 48),
-          gz + rand(-48, 48),
-          rand(35, 65),
-          rand(35, 65),
-          downtown ? rand(90, 210) : rand(22, 75),
-          pick(buildingMaterials)
-        );
+      for (let i = 0; i < wanted; i++) {
+        const spec = chooseBuilding(distance);
+
+        // Try a few positions so buildings in the same lot do not overlap
+        for (let attempt = 0; attempt < 8; attempt++) {
+          const bw = Math.round(spec.w / 6) * 6 + 6;
+          const bd = Math.round(spec.d / 6) * 6 + 6;
+          const x = gx + rand(-(78 - bw / 2), 78 - bw / 2);
+          const z = gz + rand(-(78 - bd / 2), 78 - bd / 2);
+
+          const clear = placed.every(p =>
+            Math.abs(x - p.x) > (bw + p.w) / 2 + 2 ||
+            Math.abs(z - p.z) > (bd + p.d) / 2 + 2
+          );
+          if (!clear) continue;
+
+          placed.push({ x, z, w: bw, d: bd });
+
+          if (spec.type === "tower") buildTower(x, z, spec.w, spec.d, spec.h);
+          else if (spec.type === "round") buildRoundTower(x, z, spec.r, spec.h);
+          else if (spec.type === "office") buildOffice(x, z, spec.w, spec.d, spec.h);
+          else if (spec.type === "apartment") buildApartment(x, z, spec.w, spec.d, spec.h);
+          else if (spec.type === "warehouse") buildWarehouse(x, z, spec.w, spec.d, spec.h);
+          else buildHouse(x, z, spec.w, spec.d, spec.h);
+          break;
+        }
       }
     }
   }
 
+  scatterTrees();
   flushCity();
 }
 
@@ -1038,7 +1501,7 @@ function makeCarMaterials(rich) {
     : c => new THREE.MeshLambertMaterial({ color: c });
   return {
     dark: M(0x171c22, { specular: 0x222222, shininess: 30 }),
-    glass: M(0x183746, { specular: 0x99bbcc, shininess: 100 }),
+    glass: M(0x183746, { specular: 0x99bbcc, shininess: 100, transparent: true, opacity: .55 }),
     rubber: new THREE.MeshLambertMaterial({ color: 0x101214 }),
     alloy: M(0xb9c2c8, { specular: 0xffffff, shininess: 90 })
   };
@@ -1073,20 +1536,108 @@ function wheelGeometry(radius, width) {
   return wheelGeoCache.get(key);
 }
 
-// mirror x/y/z, plate y, front plate z, rear plate z
-const CAR_DETAIL = {
-  sport:    { mirror: [1.24, 1.38, .75], plateY: .78, front: 2.26, rear: -2.24, tailZ: -2.3 },
-  supercar: { mirror: [1.2, 1.12, .75],  plateY: .66, front: 2.3,  rear: -2.29, tailZ: -2.3 },
-  suv:      { mirror: [1.4, 1.95, .95],  plateY: .95, front: 2.45, rear: -2.4,  tailZ: -2.45 },
-  sedan:    { mirror: [1.28, 1.65, .8],  plateY: .9,  front: 2.46, rear: -2.43, tailZ: -2.45 },
-  jeep:     { mirror: [1.35, 1.9, 1.1],  plateY: 1.1, front: 2.31, rear: -2.21, tailZ: -2.3 }
+// Side profiles are [z, y] points (z = forward). They are extruded sideways
+// into a smooth body shell, with a separate glass cabin on top.
+const CAR_DESIGN = {
+  sport: {
+    width: 2.38, front: 2.22, rear: -2.24,
+    body: [[2.22, .45], [2.24, .74], [2.05, .9], [1.25, 1.02], [.7, 1.07], [-1.25, 1.07], [-1.95, 1.04], [-2.2, .96], [-2.24, .62], [-2.16, .45]],
+    cabin: [[.78, 1.07], [.05, 1.64], [-.85, 1.68], [-1.5, 1.12], [-1.5, 1.07]], cabinW: 1.95,
+    roof: [.05, -.85, 1.67],
+    pillars: [[.78, 1.07, .05, 1.64], [-1.5, 1.12, -.85, 1.68]],
+    wheels: { x: 1.2, zf: 1.48, zr: -1.5, r: .43, w: .29 },
+    lamp: [.78, .8, 2.24, .46, .12], tail: [.8, .9, -2.27, .5, .12], grilleY: .64,
+    mirror: [1.27, 1.35, .65], plateY: .72, plateF: 2.3, plateR: -2.3, tailZ: -2.3,
+    cockpit: [.42, 1.36, -.05], doors: [.45, -.7], skirt: [-.01, 2.08], exhaust: true
+  },
+  supercar: {
+    width: 2.35, front: 2.25, rear: -2.28,
+    body: [[2.25, .4], [2.28, .62], [2.0, .78], [1.2, .9], [.6, .98], [-1.2, .98], [-1.8, .98], [-2.2, .92], [-2.28, .6], [-2.2, .4]],
+    cabin: [[.6, .98], [-.2, 1.45], [-.95, 1.47], [-1.6, 1.02]], cabinW: 1.7,
+    roof: [-.2, -.95, 1.48],
+    pillars: [[.6, .98, -.2, 1.45], [-1.6, 1.02, -.95, 1.47]],
+    wheels: { x: 1.18, zf: 1.48, zr: -1.5, r: .43, w: .29 },
+    lamp: [.78, .74, 2.28, .6, .1], tail: [.85, .84, -2.31, .5, .1], grilleY: .56,
+    mirror: [1.22, 1.08, .5], plateY: .6, plateF: 2.34, plateR: -2.34, tailZ: -2.3,
+    cockpit: [.4, 1.12, -.15], doors: [.35, -.8], skirt: [-.01, 2.08], exhaust: true, vent: true, wing: true
+  },
+  suv: {
+    width: 2.65, front: 2.38, rear: -2.4,
+    body: [[2.38, .55], [2.4, 1.05], [2.2, 1.3], [1.4, 1.42], [.8, 1.46], [-2.0, 1.46], [-2.35, 1.4], [-2.4, .9], [-2.35, .55]],
+    cabin: [[.85, 1.46], [.55, 2.55], [-2.0, 2.6], [-2.3, 1.46]], cabinW: 2.2,
+    roof: [.55, -2.0, 2.6],
+    pillars: [[.85, 1.46, .55, 2.55], [-2.3, 1.46, -2.0, 2.6]],
+    wheels: { x: 1.35, zf: 1.5, zr: -1.52, r: .53, w: .34 },
+    lamp: [.92, 1.14, 2.42, .5, .22], tail: [.95, 1.15, -2.43, .5, .2], grilleY: .98,
+    mirror: [1.43, 2.0, .9], plateY: .95, plateF: 2.46, plateR: -2.46, tailZ: -2.45,
+    cockpit: [.5, 2.0, .25], doors: [.6, -.5, -1.55], skirt: [0, 2.2], rails: true
+  },
+  sedan: {
+    width: 2.48, front: 2.4, rear: -2.42,
+    body: [[2.4, .45], [2.42, .8], [2.2, .98], [1.4, 1.08], [.9, 1.14], [-1.4, 1.14], [-2.05, 1.1], [-2.38, 1.02], [-2.42, .7], [-2.34, .45]],
+    cabin: [[.95, 1.14], [.2, 1.78], [-.95, 1.8], [-1.5, 1.14]], cabinW: 2.0,
+    roof: [.2, -.95, 1.82],
+    pillars: [[.95, 1.14, .2, 1.78], [-1.5, 1.14, -.95, 1.8]],
+    wheels: { x: 1.23, zf: 1.52, zr: -1.55, r: .43, w: .29 },
+    lamp: [.8, .92, 2.44, .5, .14], tail: [.82, .98, -2.45, .55, .14], grilleY: .72,
+    mirror: [1.3, 1.68, .8], plateY: .85, plateF: 2.48, plateR: -2.48, tailZ: -2.45,
+    cockpit: [.45, 1.62, .2], doors: [.6, -.45, -1.4], skirt: [-.02, 2.3], exhaust: true
+  },
+  jeep: {
+    width: 2.55, front: 2.2, rear: -2.2,
+    body: [[2.2, .6], [2.22, 1.25], [2.0, 1.4], [1.1, 1.46], [.75, 1.5], [-1.9, 1.5], [-2.2, 1.4], [-2.2, .6]],
+    cabin: [[.75, 1.5], [.7, 2.4], [-1.9, 2.42], [-1.95, 1.5]], cabinW: 2.15,
+    roof: [.7, -1.9, 2.42],
+    pillars: [[.75, 1.5, .7, 2.4], [-1.95, 1.5, -1.9, 2.42]],
+    wheels: { x: 1.3, zf: 1.42, zr: -1.38, r: .55, w: .38 },
+    lamp: [.85, 1.42, 2.25, .4, .4], tail: [1.0, 1.28, -2.23, .4, .2], grilleY: 1.38, round: true, slats: true, spare: true,
+    mirror: [1.4, 1.95, 1.0], plateY: 1.0, plateF: 2.31, plateR: -2.25, tailZ: -2.3,
+    cockpit: [.5, 1.95, 0], doors: [.4, -.55], skirt: [0, 1.9], rails: true
+  }
 };
+
+const carShellCache = new Map();
+
+function carShellGeometry(key, profile, width) {
+  if (carShellCache.has(key)) return carShellCache.get(key);
+
+  const shape = new THREE.Shape();
+  profile.forEach(([z, y], i) => (i === 0 ? shape.moveTo(z, y) : shape.lineTo(z, y)));
+  shape.closePath();
+
+  const bevel = .07;
+  const depth = Math.max(.1, width - bevel * 2);
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth, bevelEnabled: true, bevelThickness: bevel, bevelSize: bevel,
+    bevelSegments: 2, curveSegments: 1
+  });
+
+  geo.translate(0, 0, -depth / 2);   // centre across the width
+  geo.rotateY(-Math.PI / 2);         // shape x -> car z (forward)
+  carShellCache.set(key, geo);
+  return geo;
+}
+
+// A thin bar between two side-profile points (window pillars, roof rails)
+function strut(parent, x, z1, y1, z2, y2, thickness, material) {
+  const dz = z2 - z1, dy = y2 - y1;
+  const m = new THREE.Mesh(boxGeo, material);
+  m.position.set(x, (y1 + y2) / 2, (z1 + z2) / 2);
+  m.rotation.x = -Math.atan2(dy, dz);
+  m.scale.set(thickness, thickness, Math.hypot(dz, dy) + thickness);
+  parent.add(m);
+  return m;
+}
+
+const roundLampGeo = new THREE.CylinderGeometry(.2, .2, .09, 12);
+const steeringWheelGeo = new THREE.TorusGeometry(.2, .03, 6, 14);
 
 function createCar(color = 0xe33b2e, style = "sport", rich = false) {
   const car = new THREE.Group();
   car.rotation.order = "YXZ";   // yaw first, then pitch / roll
   const spec = VEHICLES[style] || VEHICLES.sport;
-  const detail = CAR_DETAIL[style] || CAR_DETAIL.sport;
+  const design = CAR_DESIGN[style] || CAR_DESIGN.sport;
+  const W = design.width;
 
   const paint = rich
     ? new THREE.MeshPhongMaterial({ color, specular: 0x555555, shininess: 70 })
@@ -1100,11 +1651,9 @@ function createCar(color = 0xe33b2e, style = "sport", rich = false) {
   const wheels = [];
   const frontWheels = [];
 
-  function part(x, y, z, sx, sy, sz, material) {
-    return box(car, x, y, z, sx, sy, sz, material);
-  }
+  const part = (x, y, z, sx, sy, sz, material) => box(car, x, y, z, sx, sy, sz, material);
 
-  function addWheel(x, z, radius = .43, width = .28) {
+  function addWheel(x, z, radius, width) {
     const g = wheelGeometry(radius, width);
     const tire = new THREE.Mesh(g.tire, rubber);
     const rim = new THREE.Mesh(g.rim, alloy);
@@ -1119,117 +1668,128 @@ function createCar(color = 0xe33b2e, style = "sport", rich = false) {
       wheels.push(m);
       if (z > 0) frontWheels.push(m);
     }
-  }
 
-  if (style === "sport") {
-    part(0, .83, 0, 2.38, .55, 4.45, paint);
-    part(0, 1.04, 1.35, 2.25, .27, 1.45, paint);
-    part(0, 1, -1.55, 2.32, .28, 1.18, paint);
-    part(0, 1.65, -.12, 1.75, .65, 1.8, glass);
-    part(0, 2, -.12, 1.8, .12, 1.9, paint);
-    for (const s of [-1, 1]) {
-      part(s * .91, 1.42, -.12, .1, .45, 1.8, paint);
-      part(s * .78, 1.06, 2.15, .45, .13, .08, lamp);
-      part(s * .82, 1.04, -2.13, .5, .14, .08, redLamp);
-    }
-    part(0, .63, 2.3, 2.3, .12, .2, dark);
-    for (const x of [-1.2, 1.2]) {
-      for (const z of [-1.5, 1.48]) addWheel(x, z, .43, .29);
-    }
-  } else if (style === "supercar") {
-    part(0, .68, 0, 2.35, .42, 4.55, paint);
-    part(0, .75, 1.45, 2.2, .25, 1.55, paint);
-    part(0, .78, -1.62, 2.3, .34, 1.25, paint);
-    part(0, 1.46, -.12, 1.65, .5, 1.65, glass);
-    part(0, 1.74, -.12, 1.7, .1, 1.7, paint);
-    for (const s of [-1, 1]) {
-      part(s * 1.15, .86, -.62, .13, .43, .72, dark);
-      part(s * .78, .96, 2.18, .62, .1, .1, lamp);
-      part(s * .9, 1.02, -2.17, .24, .12, .07, redLamp);
-      part(s * .7, 1.12, -2.0, .08, .34, .12, dark);   // spoiler supports
-    }
-    part(0, 1.3, -2.0, 2.2, .07, .55, dark);           // spoiler wing
-    part(0, .55, -2.24, 2.25, .2, .24, dark);
-    for (const x of [-1.18, 1.18]) {
-      for (const z of [-1.5, 1.48]) addWheel(x, z, .43, .29);
-    }
-  } else if (style === "suv") {
-    part(0, 1.02, 0, 2.65, .78, 4.75, paint);
-    part(0, 1.13, 1.52, 2.58, .42, 1.25, paint);
-    part(0, 1.16, -1.68, 2.6, .42, 1.1, paint);
-    part(0, 2.03, -.12, 2.1, 1.25, 2.65, glass);
-    part(0, 2.7, -.12, 2.16, .16, 2.72, paint);
-    for (const s of [-1, 1]) {
-      part(s * 1.08, 2.02, -.12, .13, 1, 2.65, paint);
-      part(s * 1.13, 1.95, .72, .055, .7, .95, glass);
-      part(s * 1.13, 1.95, -.55, .055, .7, .9, glass);
-      part(s * .91, 1.5, 2.35, .48, .2, .09, lamp);
-      part(s * .95, 1.4, -2.39, .5, .16, .08, redLamp);
-    }
-    part(0, 1.12, 2.42, 1.45, .5, .06, dark);
-    for (const x of [-1.35, 1.35]) {
-      for (const z of [-1.52, 1.5]) addWheel(x, z, .53, .34);
-    }
-  } else if (style === "sedan") {
-    part(0, .88, 0, 2.48, .58, 4.8, paint);
-    part(0, 1.05, 1.45, 2.4, .3, 1.55, paint);
-    part(0, 1.06, -1.68, 2.4, .3, 1.18, paint);
-    part(0, 1.72, -.18, 1.9, .95, 2.45, glass);
-    part(0, 2.23, -.18, 1.95, .13, 2.5, paint);
-    for (const s of [-1, 1]) {
-      part(s * .98, 1.7, -.18, .08, .82, 2.45, paint);
-      part(s * 1.02, 1.74, .57, .04, .62, .82, glass);
-      part(s * 1.02, 1.74, -.48, .04, .62, .82, glass);
-    }
-    part(0, .76, 2.43, 2.48, .23, .2, dark);
-    for (const s of [-1, 1]) {
-      part(s * .78, 1.12, 2.23, .48, .14, .09, lamp);
-      part(s * .82, 1.08, -2.3, .55, .15, .09, redLamp);
-    }
-    for (const x of [-1.23, 1.23]) {
-      for (const z of [-1.55, 1.52]) addWheel(x, z, .43, .29);
-    }
-  } else {
-    part(0, 1, 0, 2.55, .85, 4.35, paint);
-    part(0, 1.22, 1.35, 2.52, .55, 1.25, paint);
-    part(0, 1.18, -1.55, 2.5, .5, 1.1, paint);
-    part(0, 2.05, -.18, 2.1, 1.25, 2.55, paint);
-    part(0, 2.73, -.18, 2.25, .2, 2.9, dark);
-    part(0, 2.12, 1.1, 1.95, .83, .1, glass);
-    for (const s of [-1, 1]) {
-      part(s * 1.08, 2.04, -.2, .12, 1.1, 2.55, dark);
-      part(s * 1.12, 1.96, -.5, .06, .7, .9, glass);
-      part(s * 1.12, 1.96, .55, .06, .7, .9, glass);
-      const head = new THREE.Mesh(
-        new THREE.CylinderGeometry(.2, .2, .09, 12), lamp
-      );
-      head.rotation.x = Math.PI / 2;
-      head.position.set(s * .85, 1.42, 2.26);
-      car.add(head);
-      part(s * 1.0, 1.2, -2.19, .4, .16, .06, redLamp);
-    }
-    part(0, 1.38, 2.23, 1.05, .48, .07, dark);
-    for (let i = -3; i <= 3; i++) {
-      part(i * .14, 1.38, 2.28, .055, .37, .025, alloy);
-    }
-    const spare = new THREE.Mesh(
-      new THREE.TorusGeometry(.39, .13, 6, 14), rubber
-    );
-    spare.position.set(0, 1.45, -2.25);
-    car.add(spare);
-    for (const x of [-1.3, 1.3]) {
-      for (const z of [-1.38, 1.42]) addWheel(x, z, .55, .38);
+    if (rich) {
+      // Dark wheel-arch ring on the side of the body
+      const arch = new THREE.Mesh(cylinderGeo, dark);
+      arch.rotation.z = Math.PI / 2;
+      arch.scale.set(radius + .11, .05, radius + .11);
+      arch.position.set(Math.sign(x) * (W / 2 + .01), radius, z);
+      car.add(arch);
     }
   }
 
-  // Side mirrors and number plates
+  /* ----- shell: body, glass cabin, roof ----- */
+  car.add(new THREE.Mesh(carShellGeometry(style + "_body", design.body, W), paint));
+
+  const cabin = new THREE.Mesh(carShellGeometry(style + "_cabin", design.cabin, design.cabinW), glass);
+  cabin.renderOrder = 1;
+  car.add(cabin);
+
+  const [roofFront, roofRear, roofY] = design.roof;
+  part(0, roofY + .03, (roofFront + roofRear) / 2, design.cabinW + .06, .09, roofFront - roofRear + .1, paint);
+
+  if (rich) {
+    for (const s of [-1, 1]) {
+      for (const p of design.pillars) {
+        strut(car, s * design.cabinW / 2, p[0], p[1], p[2], p[3], .08, paint);
+      }
+    }
+  }
+
+  /* ----- front and rear ----- */
+  const L = design.lamp, T = design.tail;
   for (const s of [-1, 1]) {
-    part(s * detail.mirror[0], detail.mirror[1], detail.mirror[2], .22, .16, .1, paint);
+    if (design.round) {
+      const head = new THREE.Mesh(roundLampGeo, lamp);
+      head.rotation.x = Math.PI / 2;
+      head.position.set(s * L[0], L[1], L[2]);
+      car.add(head);
+    } else {
+      part(s * L[0], L[1], L[2], L[3], L[4], .08, lamp);
+    }
+    part(s * T[0], T[1], T[2], T[3], T[4], .08, redLamp);
   }
-  part(0, detail.plateY, detail.front, .62, .2, .04, plateMat);
-  part(0, detail.plateY, detail.rear, .62, .2, .04, plateMat);
 
-  // Fake soft shadow under the car
+  part(0, design.grilleY, design.front + .04, W * .42, .2, .07, dark);
+  part(0, .5, design.front + .02, W - .1, .17, .14, dark);       // front bumper
+  part(0, .5, design.rear - .02, W - .1, .17, .14, dark);        // rear bumper
+
+  if (design.slats) {
+    for (let i = -3; i <= 3; i++) part(i * .14, design.grilleY, design.front + .09, .055, .37, .025, alloy);
+  }
+
+  if (design.wing) {
+    part(0, 1.3, -2.0, 2.2, .07, .55, dark);
+    for (const s of [-1, 1]) part(s * .7, 1.12, -2.0, .08, .34, .12, dark);
+  }
+
+  if (design.vent) part(0, .95, 1.25, .7, .03, .7, dark);
+
+  if (design.exhaust) {
+    for (const s of [-.55, .55]) {
+      const pipe = new THREE.Mesh(cylinderGeo, alloy);
+      pipe.rotation.x = Math.PI / 2;
+      pipe.scale.set(.07, .3, .07);
+      pipe.position.set(s, .42, design.rear - .06);
+      car.add(pipe);
+    }
+  }
+
+  if (design.spare) {
+    const spare = new THREE.Mesh(new THREE.TorusGeometry(.39, .13, 6, 14), rubber);
+    spare.position.set(0, 1.45, design.rear - .12);
+    car.add(spare);
+  }
+
+  /* ----- sides ----- */
+  for (const s of [-1, 1]) {
+    part(s * design.mirror[0], design.mirror[1], design.mirror[2], .22, .16, .1, paint);
+  }
+
+  part(0, design.plateY, design.plateF, .62, .2, .04, plateMat);
+  part(0, design.plateY, design.plateR, .62, .2, .04, plateMat);
+
+  if (rich) {
+    for (const z of design.doors) {
+      for (const s of [-1, 1]) part(s * (W / 2 + .012), .8, z, .02, .5, .025, dark);
+    }
+    for (const s of [-1, 1]) part(s * (W / 2), .5, design.skirt[0], .07, .12, design.skirt[1], dark);
+
+    if (design.rails) {
+      for (const s of [-1, 1]) {
+        part(s * design.cabinW * .36, roofY + .1, (roofFront + roofRear) / 2, .07, .07, roofFront - roofRear - .2, dark);
+      }
+    }
+
+    part(.55, roofY + .2, roofRear + .5, .02, .4, .02, dark);   // aerial
+  }
+
+  /* ----- wheels ----- */
+  const w = design.wheels;
+  for (const x of [-w.x, w.x]) {
+    addWheel(x, w.zr, w.r, w.w);
+    addWheel(x, w.zf, w.r, w.w);
+  }
+
+  /* ----- interior (visible through the glass on the player's car) ----- */
+  if (rich) {
+    const [cx, cy, cz] = design.cockpit;
+
+    for (const sx of [cx, -cx]) {
+      part(sx, cy - .62, cz - .15, .52, .14, .55, dark);       // seat
+      part(sx, cy - .3, cz - .45, .52, .6, .12, dark);         // back rest
+    }
+
+    part(0, cy - .42, cz + .7, W * .62, .26, .5, dark);        // dashboard
+
+    const wheel = new THREE.Mesh(steeringWheelGeo, dark);
+    wheel.position.set(cx, cy - .3, cz + .42);
+    wheel.rotation.x = -.8;
+    car.add(wheel);
+  }
+
+  // Soft shadow under the car
   const shadow = new THREE.Mesh(carShadowGeo, carShadowMat);
   shadow.rotation.x = -Math.PI / 2;
   shadow.position.y = .04;
@@ -1242,7 +1802,7 @@ function createCar(color = 0xe33b2e, style = "sport", rich = false) {
     for (const s of [-1, 1]) {
       const cone = new THREE.Mesh(flameGeo, flameMat);
       cone.rotation.x = -Math.PI / 2;
-      cone.position.set(s * .62, .7, detail.tailZ - .9);
+      cone.position.set(s * .62, .7, design.tailZ - .9);
       flames.add(cone);
     }
     flames.visible = false;
@@ -1257,6 +1817,7 @@ function createCar(color = 0xe33b2e, style = "sport", rich = false) {
   car.userData.tailLit = false;
   car.userData.style = style;
   car.userData.spec = spec;
+  car.userData.cockpit = design.cockpit;
   car.userData.vehicleName = spec.name;
   return car;
 }
@@ -1325,6 +1886,7 @@ let staminaDelay = 0;
 let playerGround = 0;
 let jumpOffset = 0;
 let playerSpeedNow = 0;
+let strafeNow = 0;
 let lastMoveSign = 1;
 let camShake = 0;
 let crashCooldown = 0;
@@ -1821,6 +2383,7 @@ function refreshGarageCards() {
 
 function openGarage() {
   if (!started || paused || driving || chatOpen) return;
+  releaseMouse();
   garageOpen = true;
   garagePanel.classList.remove("hidden");
   refreshGarageCards();
@@ -2300,6 +2863,7 @@ function addChatLine(name, message, system = false) {
 function openChat() {
   if (!started || paused || garageOpen) return;
   if (!chatVisible) setChatVisible(true);
+  releaseMouse();
   chatOpen = true;
   chatInput.placeholder = "Write a message...";
   chatInput.focus();
@@ -2409,6 +2973,7 @@ else {
 // Typing in the box always pauses movement keys; leaving it resumes them
 chatInput.addEventListener("focus", () => {
   if (started && !paused && !garageOpen) {
+    releaseMouse();
     chatOpen = true;
     clearControls();
   }
@@ -3184,6 +3749,11 @@ window.addEventListener("keydown", event => {
   if (key === "t" && !event.repeat && started) toggleChatPanel();
   if (key === "g" && !event.repeat && started) cycleWeather();
   if (key === "u" && !event.repeat && started) recoverCar(false);
+  if (key === "p" && !event.repeat && started) togglePOV();
+  if ((key === "+" || key === "=") && started) zoomBy(.88);
+  if ((key === "-" || key === "_") && started) zoomBy(1.14);
+  if (key === "l" && !event.repeat && started) toggleMouseLock();
+  if (key === "x" && !event.repeat && started) cycleWeapon(1);
 
   if (key === "c" && !event.repeat && driving) {
     const color = pick(carPaints);
@@ -3293,6 +3863,7 @@ const walkDirection = new THREE.Vector3();
 function updatePlayer(dt) {
   if (driving) {
     playerSpeedNow = 0;
+    strafeNow = 0;
     sprinting = false;
     return;
   }
@@ -3305,11 +3876,15 @@ function updatePlayer(dt) {
   const wantSprint = !locked && (pressed("shift") || controls.boost);
 
   // Turning works even while standing still (keys or touch joystick)
-  const turn = locked ? 0 : clamp(
+  const sideInput = locked ? 0 : clamp(
     ((pressed("a", "arrowleft") || controls.left) ? 1 : 0) -
     ((pressed("d", "arrowright") || controls.right) ? 1 : 0) -
     controls.axisX, -1, 1
   );
+
+  // With the mouse locked, or in first person, A / D strafe instead of turning
+  const strafeMode = pointerLocked || firstPerson;
+  const turn = strafeMode ? 0 : sideInput;
   const turnRate =
     (forward || backward ? 2.4 : 2.9) * (touchUIActive ? 1.2 : 1) *
     (sprinting ? .75 : 1);
@@ -3350,10 +3925,18 @@ function updatePlayer(dt) {
   if (forward || backward) lastMoveSign = forward ? 1 : -1;
 
   walkDirection.set(Math.sin(playerRotation), 0, Math.cos(playerRotation));
-  const dx = walkDirection.x * playerSpeedNow * lastMoveSign * dt;
-  const dz = walkDirection.z * playerSpeedNow * lastMoveSign * dt;
+  const strafeTarget = strafeMode
+    ? sideInput * (sprinting ? SPRINT_SPEED : WALK_SPEED) * .8
+    : 0;
+  strafeNow += (strafeTarget - strafeNow) * Math.min(1, dt * 9);
+  if (Math.abs(strafeNow) < .05 && strafeTarget === 0) strafeNow = 0;
 
-  if (playerSpeedNow > 0) {
+  const dx = walkDirection.x * playerSpeedNow * lastMoveSign * dt +
+    Math.cos(playerRotation) * strafeNow * dt;
+  const dz = walkDirection.z * playerSpeedNow * lastMoveSign * dt -
+    Math.sin(playerRotation) * strafeNow * dt;
+
+  if (playerSpeedNow > 0 || strafeNow !== 0) {
     if (jumping) {
       moveWithCollision(player, dx, dz, PLAYER_RADIUS);
     } else {
@@ -3365,7 +3948,10 @@ function updatePlayer(dt) {
 
   player.rotation.y = playerRotation;
   animateCharacter(
-    player, dt, playerSpeedNow > .8, playerSpeedNow / 4, sprinting
+    player, dt,
+    Math.hypot(playerSpeedNow, strafeNow) > .8,
+    Math.hypot(playerSpeedNow, strafeNow) / 4,
+    sprinting
   );
   applyAimPose(player);
 }
@@ -3606,10 +4192,138 @@ let camHeading = 0;
 let camDistance = 9.5;
 let camFocusY = 0;
 
+// Zoom and look state
+let camZoom = 1;              // 1 = normal chase camera, smaller = closer
+let camZoomTarget = 1;
+let firstPerson = false;
+let lookYaw = 0;              // free look while driving
+let lookPitch = 0;
+let lastLookTime = 0;
+let pointerLocked = false;
+let fpRecoil = 0;
+const FP_THRESHOLD = .16;
+const MOUSE_SENS = .0024;
+
+function zoomBy(factor) {
+  let target = camZoomTarget * factor;
+
+  if (camZoomTarget <= FP_THRESHOLD && factor > 1) target = .5;     // out of first person
+  else if (target < .3 && factor < 1) target = .05;                  // into first person
+
+  camZoomTarget = clamp(target, .05, 2.4);
+}
+
+function togglePOV() {
+  const goFirstPerson = !firstPerson;
+  camZoomTarget = goFirstPerson ? .05 : 1;
+  showMessage(goFirstPerson ? "FIRST PERSON" : "THIRD PERSON");
+}
+
+function applyLook(dx, dy) {
+  lastLookTime = performance.now();
+
+  if (!driving) playerRotation -= dx * MOUSE_SENS;
+  else lookYaw = clamp(lookYaw - dx * MOUSE_SENS, -2.6, 2.6);
+
+  lookPitch = clamp(lookPitch - dy * MOUSE_SENS, -1.1, 1.1);
+}
+
+function releaseMouse() {
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+
+function toggleMouseLock() {
+  if (!started || paused) return;
+
+  if (document.pointerLockElement) {
+    document.exitPointerLock();
+    return;
+  }
+
+  const canvas = renderer.domElement;
+  if (!canvas.requestPointerLock) {
+    showMessage("MOUSE LOCK IS NOT SUPPORTED HERE");
+    return;
+  }
+
+  const result = canvas.requestPointerLock();
+  if (result && result.catch) result.catch(() => {});
+}
+
+// Eye position: the driver's seat, or the player's head
+function updateFirstPersonCamera(dt) {
+  let px, py, pz, yaw;
+
+  if (driving) {
+    const c = car.userData.cockpit;
+    const cos = Math.cos(carRotation), sin = Math.sin(carRotation);
+    px = car.position.x + c[0] * cos + c[2] * sin;
+    pz = car.position.z - c[0] * sin + c[2] * cos;
+    py = car.position.y + c[1];
+    yaw = carRotation + lookYaw;
+  } else {
+    const d = player.userData;
+    const bob = Math.sin(d.walkTime * 2) * .035 * d.amp;
+    px = player.position.x + Math.sin(playerRotation) * .12;
+    pz = player.position.z + Math.cos(playerRotation) * .12;
+    py = player.position.y + (playerDead ? .35 : 1.72 + bob);
+    yaw = playerRotation;
+  }
+
+  const shake = camShake + (nitroActive ? .02 : 0);
+  if (shake > .01) {
+    px += (Math.random() - .5) * shake * .3;
+    py += (Math.random() - .5) * shake * .2;
+  }
+  camShake *= Math.max(0, 1 - 5 * dt);
+
+  camera.position.set(px, py, pz);
+  const cp = Math.cos(lookPitch);
+  camera.lookAt(
+    px + Math.sin(yaw) * cp * 10,
+    py + Math.sin(lookPitch) * 10,
+    pz + Math.cos(yaw) * cp * 10
+  );
+
+  const kmh = Math.abs(carSpeed) * 3.6;
+  const targetFov = 78 + (driving ? Math.min(kmh / 300, 1) * 8 + (nitroActive ? 8 : 0) : (sprinting ? 5 : 0));
+  fovCurrent += (targetFov - fovCurrent) * (1 - Math.exp(-4 * dt));
+  if (Math.abs(camera.fov - fovCurrent) > .05) {
+    camera.fov = fovCurrent;
+    camera.updateProjectionMatrix();
+  }
+}
+
 // All smoothing is frame-rate independent (exp), so it stays smooth at low FPS.
 function updateCamera(dt) {
+  camZoom += (camZoomTarget - camZoom) * (1 - Math.exp(-10 * dt));
+
+  const wasFirstPerson = firstPerson;
+  firstPerson = camZoom < FP_THRESHOLD;
+
+  if (firstPerson !== wasFirstPerson) {
+    camera.near = firstPerson ? .1 : .5;
+    camera.updateProjectionMatrix();
+    if (!firstPerson) lookPitch = 0;
+  }
+
+  // Free look eases back to centre when the mouse / finger is idle
+  if (driving && performance.now() - lastLookTime > 1000) {
+    lookYaw *= Math.exp(-3 * dt);
+    lookPitch *= Math.exp(-2 * dt);
+  }
+  if (!driving) lookYaw = 0;
+
+  // The body is hidden in first person
+  if (!driving) player.visible = !firstPerson;
+
+  if (firstPerson) {
+    updateFirstPersonCamera(dt);
+    return;
+  }
+
   const target = driving ? car : player;
-  const heading = driving ? carRotation : playerRotation;
+  const heading = (driving ? carRotation : playerRotation) + (driving ? lookYaw : 0);
   const kmh = Math.abs(carSpeed) * 3.6;
 
   // The camera swings round gently behind the vehicle instead of snapping
@@ -3618,12 +4332,12 @@ function updateCamera(dt) {
   );
   camHeading += diff * (1 - Math.exp(-(driving ? 6 : 10) * dt));
 
-  const distanceTarget = driving
+  const distanceTarget = (driving
     ? 14 + Math.min(kmh / 70, 4) + (nitroActive ? 2 : 0)
-    : 9.5 + (sprinting ? 1 : 0);
-  camDistance += (distanceTarget - camDistance) * (1 - Math.exp(-3 * dt));
+    : 9.5 + (sprinting ? 1 : 0)) * camZoom;
+  camDistance += (distanceTarget - camDistance) * (1 - Math.exp(-5 * dt));
 
-  const height = driving ? 6.6 + Math.min(kmh / 150, 1.2) : 5.2;
+  const height = (driving ? 6.6 + Math.min(kmh / 150, 1.2) : 5.2) * (.3 + .7 * camZoom);
   const lookHeight = driving ? 1.6 : 1.8;
 
   // Curb bumps and jumps do not jerk the camera
@@ -3639,7 +4353,7 @@ function updateCamera(dt) {
     if (!circleHitsBuilding(px, pz, 1.4)) break;
   }
 
-  cameraPosition.set(px, camFocusY + height, pz);
+  cameraPosition.set(px, camFocusY + height + lookPitch * camDistance * .6, pz);
   camera.position.lerp(cameraPosition, 1 - Math.exp(-(driving ? 12 : 10) * dt));
 
   const shake = camShake + (nitroActive ? .08 : 0);
@@ -3817,6 +4531,7 @@ let stickPointer = null;
 let engineTouchButton = null;
 const touchModeButtons = [];
 let touchSignature = "";
+let touchHintShown = false;
 
 function buildTouchUI() {
   if (touchBuilt) return;
@@ -3938,6 +4653,7 @@ function buildTouchUI() {
   document.body.appendChild(chatPanel);          // chat becomes a floating overlay
   touchTop.appendChild(makeSys("CARS", () => toggleGarage()));
   touchTop.appendChild(makeSys("SKY", () => cycleWeather()));
+  touchTop.appendChild(makeSys("VIEW", () => togglePOV()));
 
   if (document.fullscreenEnabled || document.webkitFullscreenEnabled) {
     touchTop.appendChild(makeSys("FULL", toggleFullscreen));
@@ -3988,6 +4704,11 @@ function updateTouchUI() {
 
   if (signature === touchSignature) return;
   touchSignature = signature;
+
+  if (active && !touchHintShown) {
+    touchHintShown = true;
+    showMessage("DRAG = LOOK  •  PINCH = ZOOM  •  VIEW = FIRST PERSON");
+  }
 
   stickEl.style.display = active ? "block" : "none";
   touchRight.style.display = active ? "block" : "none";
@@ -4250,6 +4971,7 @@ function togglePause() {
   if (!started || chatOpen || garageOpen) return;
 
   paused = !paused;
+  if (paused) releaseMouse();
 
   if (pauseScreen) {
     pauseScreen.classList.toggle("hidden", !paused);
@@ -5369,6 +6091,7 @@ function playerFire() {
 
   playGunSound(currentWeapon);
   camShake = Math.max(camShake, w.id === "shotgun" ? .35 : .12);
+  fpRecoil = Math.min(.22, fpRecoil + .12);
 }
 
 function startReload() {
@@ -5650,6 +6373,14 @@ let lastCrossState = "";
 function updateCombatHud(dt) {
   const show = started && !paused;
   combatPanel.style.display = show ? "block" : "none";
+  viewStack.style.display = show && !touchUIActive ? "flex" : "none";
+  povButton.classList.toggle("on", firstPerson);
+  updateViewModel(dt);
+
+  if (show && !viewHintShown && !touchUIActive) {
+    viewHintShown = true;
+    showMessage("WHEEL = ZOOM  •  P = FIRST PERSON  •  L = LOCK MOUSE");
+  }
 
   damageFlash = Math.max(0, damageFlash - dt * 1.4);
   hitMarker = Math.max(0, hitMarker - dt);
@@ -5786,11 +6517,15 @@ renderer.domElement.addEventListener("pointerdown", event => {
 window.addEventListener("pointerup", event => {
   if (event.pointerType === "mouse") controls.fire = false;
 });
+// Mouse wheel zooms (Shift + wheel changes weapon)
 renderer.domElement.addEventListener("wheel", event => {
-  if (started && !paused && !driving && !chatOpen && !garageOpen) {
-    event.preventDefault();
-    cycleWeapon(event.deltaY > 0 ? 1 : -1);
-  }
+  if (!started || paused || chatOpen || garageOpen) return;
+  event.preventDefault();
+
+  const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+
+  if (event.shiftKey && !driving) cycleWeapon(delta > 0 ? 1 : -1);
+  else zoomBy(delta > 0 ? 1.12 : .89);
 }, { passive: false });
 
 // Messages from other players (needs the small server relay shown in the notes)
@@ -5818,6 +6553,130 @@ socket.on("player:hit", data => {
 });
 
 createPickups();
+
+/* =========================================================
+   VIEW CONTROLS — ZOOM, FIRST PERSON, MOUSE LOCK, TOUCH LOOK
+   ========================================================= */
+
+const viewStyle = document.createElement("style");
+viewStyle.textContent = `
+#vice-view-stack{position:fixed;left:10px;top:50%;transform:translateY(-50%);display:none;flex-direction:column;gap:6px;z-index:9000}
+.vice-view-btn{width:50px;min-height:36px;padding:4px 2px;border:1px solid rgba(255,255,255,.6);border-radius:8px;background:rgba(12,24,36,.78);color:#fff;font:bold 10px/1.2 Arial,sans-serif;cursor:pointer;touch-action:manipulation}
+.vice-view-btn.on{background:rgba(214,166,46,.92);color:#111}
+body.vice-touch #vice-view-stack{display:none!important}
+`;
+document.head.appendChild(viewStyle);
+
+const viewStack = document.createElement("div");
+viewStack.id = "vice-view-stack";
+document.body.appendChild(viewStack);
+
+function makeViewButton(html, action) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.tabIndex = -1;
+  button.className = "vice-view-btn";
+  button.innerHTML = html;
+  button.addEventListener("mousedown", event => event.preventDefault());
+  button.addEventListener("click", () => {
+    action();
+    button.blur();
+  });
+  viewStack.appendChild(button);
+  return button;
+}
+
+const povButton = makeViewButton("VIEW<br>[P]", () => togglePOV());
+makeViewButton("ZOOM<br>+", () => zoomBy(.8));
+makeViewButton("ZOOM<br>−", () => zoomBy(1.25));
+const lockButton = makeViewButton("LOCK<br>MOUSE [L]", () => toggleMouseLock());
+
+if (!renderer.domElement.requestPointerLock) lockButton.style.display = "none";
+
+// First-person gun shown in front of the camera
+scene.add(camera);
+const fpMount = new THREE.Group();
+fpMount.position.set(.28, -.26, -.75);
+camera.add(fpMount);
+let fpGunIndex = -2;
+let fpGunMesh = null;
+
+function updateViewModel(dt) {
+  const wanted = firstPerson && !driving && currentWeapon >= 0 && !playerDead
+    ? currentWeapon : -1;
+
+  if (wanted !== fpGunIndex) {
+    if (fpGunMesh) { fpMount.remove(fpGunMesh); fpGunMesh = null; }
+    fpGunIndex = wanted;
+
+    if (wanted >= 0) {
+      fpGunMesh = buildGun(wanted);
+      fpGunMesh.rotation.y = Math.PI;      // barrel points away from the camera
+      fpGunMesh.scale.setScalar(1.3);
+      fpMount.add(fpGunMesh);
+    }
+  }
+
+  fpRecoil *= Math.max(0, 1 - 14 * dt);
+  fpMount.position.z = -.75 + fpRecoil;
+  fpMount.visible = wanted >= 0;
+}
+
+document.addEventListener("pointerlockchange", () => {
+  pointerLocked = document.pointerLockElement === renderer.domElement;
+  lockButton.classList.toggle("on", pointerLocked);
+  if (started) {
+    showMessage(pointerLocked ? "MOUSE LOCKED — ESC TO RELEASE" : "MOUSE RELEASED");
+  }
+});
+
+document.addEventListener("mousemove", event => {
+  if (!pointerLocked || !started || paused || chatOpen || garageOpen || playerDead) return;
+  applyLook(event.movementX, event.movementY);
+});
+
+/* Touch: drag on empty screen to look, pinch with two fingers to zoom */
+const lookPointers = new Map();
+let pinchDistance = 0;
+
+function currentPinchDistance() {
+  const points = [...lookPointers.values()];
+  return Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+}
+
+renderer.domElement.addEventListener("pointerdown", event => {
+  if (event.pointerType !== "touch") return;
+  lookPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  if (renderer.domElement.setPointerCapture) renderer.domElement.setPointerCapture(event.pointerId);
+  if (lookPointers.size === 2) pinchDistance = currentPinchDistance();
+});
+
+renderer.domElement.addEventListener("pointermove", event => {
+  const point = lookPointers.get(event.pointerId);
+  if (!point || !started || paused || chatOpen || garageOpen) return;
+
+  const dx = event.clientX - point.x;
+  const dy = event.clientY - point.y;
+  point.x = event.clientX;
+  point.y = event.clientY;
+
+  if (lookPointers.size >= 2) {
+    const distance = currentPinchDistance();
+    if (pinchDistance > 0 && distance > 0) zoomBy(pinchDistance / distance);
+    pinchDistance = distance;
+  } else if (!playerDead) {
+    applyLook(dx * 1.4, dy * 1.4);
+  }
+});
+
+const endLookPointer = event => {
+  lookPointers.delete(event.pointerId);
+  pinchDistance = lookPointers.size >= 2 ? currentPinchDistance() : 0;
+};
+renderer.domElement.addEventListener("pointerup", endLookPointer);
+renderer.domElement.addEventListener("pointercancel", endLookPointer);
+
+let viewHintShown = false;
 
 /* =========================================================
    PERFORMANCE — AUTOMATIC GRAPHICS QUALITY (LOW-END PCs)

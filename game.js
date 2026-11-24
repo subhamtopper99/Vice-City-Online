@@ -1,7 +1,7 @@
 import * as THREE from "https://esm.sh/three@0.160.0";
 
 /* =========================================================
-   VICE CITY — UPDATE 28
+   VICE CITY — UPDATE 29
    Complete game.js
    Original Update 23 visuals preserved.
    Multiplayer connection and reconnection improvements.
@@ -79,7 +79,8 @@ let pixelRatio = Math.min(devicePixelRatio || 1, 1);
 
 const renderer = new THREE.WebGLRenderer({
   antialias: false,
-  powerPreference: "high-performance"
+  powerPreference: "high-performance",
+  precision: (window.matchMedia && window.matchMedia("(pointer:coarse)").matches) ? "mediump" : "highp"
 });
 
 renderer.setSize(innerWidth, innerHeight);
@@ -112,6 +113,12 @@ const touchCapable =
   !!(window.matchMedia && window.matchMedia("(pointer:coarse)").matches) ||
   (navigator.maxTouchPoints > 1 && Math.min(screen.width, screen.height) < 900);
 let touchUIActive = false;
+
+// Fewer cars and pedestrians on phones
+if (touchCapable) {
+  CONFIG.MAX_TRAFFIC = 6;
+  CONFIG.MAX_PEDESTRIANS = 6;
+}
 
 (function setupMobilePage() {
   let meta = document.querySelector('meta[name="viewport"]');
@@ -413,8 +420,12 @@ const parks = [];
 
 /* Draws many identical boxes with ONE draw call (fast). */
 function makeInstancedBoxes(material, items) {
+  makeInstanced(boxGeo, material, items);
+}
+
+function makeInstanced(geo, material, items) {
   if (!items.length) return;
-  const mesh = new THREE.InstancedMesh(boxGeo, material, items.length);
+  const mesh = new THREE.InstancedMesh(geo, material, items.length);
   const d = new THREE.Object3D();
   items.forEach(([x, y, z, sx, sy, sz], i) => {
     d.position.set(x, y, z);
@@ -538,26 +549,63 @@ function createCrosswalks() {
   makeInstancedBoxes(mat.white, items);
 }
 
+const parkGrassItems = [];
+const parkPathItems = [];
+const parkTrunkItems = [];
+const parkCrownItems = [];
+
 function createPark(x, z) {
   parks.push({ x, z });
-  box(world, x, -.35, z, 125, .4, 125, mat.grass);
-  box(world, x, -.12, z, 8, .08, 105, mat.sidewalk);
-  box(world, x, -.11, z, 105, .08, 8, mat.sidewalk);
+  parkGrassItems.push([x, -.35, z, 125, .4, 125]);
+  parkPathItems.push([x, -.12, z, 8, .08, 105], [x, -.11, z, 105, .08, 8]);
 
   for (let i = 0; i < 8; i++) {
     const tx = x + rand(-48, 48);
     const tz = z + rand(-48, 48);
-    cylinder(world, tx, 4, tz, 1.2, 8, mat.trunk);
-
-    const crown = new THREE.Mesh(sphereGeo, mat.tree);
-    crown.position.set(tx, 9, tz);
-    crown.scale.set(5, 5, 5);
-    world.add(crown);
+    parkTrunkItems.push([tx, 4, tz, 1.2, 8, 1.2]);
+    parkCrownItems.push([tx, 9, tz, 5, 5, 5]);
   }
 }
 
 const roofMaterial = new THREE.MeshLambertMaterial({ color: 0x66696b });
 const roofDetailMaterial = new THREE.MeshLambertMaterial({ color: 0x8c9094 });
+
+// Every building is added to one big mesh per material (2 - 9 draw calls
+// for the whole city instead of one per building).
+const buildingBatches = new Map();
+const roofBatch = { positions: [], normals: [], uvs: [], indices: [], count: 0 };
+const roofDetailItems = [];
+
+function batchFor(material) {
+  if (!buildingBatches.has(material)) {
+    buildingBatches.set(material, { positions: [], normals: [], uvs: [], indices: [], count: 0 });
+  }
+  return buildingBatches.get(material);
+}
+
+// Copies some faces of a BoxGeometry into a batch, moved to (ox, oy, oz)
+function addFaces(batch, geo, faces, ox, oy, oz) {
+  const pos = geo.attributes.position;
+  const nor = geo.attributes.normal;
+  const uv = geo.attributes.uv;
+  const index = geo.index.array;
+
+  for (const f of faces) {
+    const base = batch.count;
+
+    for (let v = f * 4; v < f * 4 + 4; v++) {
+      batch.positions.push(pos.getX(v) + ox, pos.getY(v) + oy, pos.getZ(v) + oz);
+      batch.normals.push(nor.getX(v), nor.getY(v), nor.getZ(v));
+      batch.uvs.push(uv.getX(v), uv.getY(v));
+    }
+
+    for (let k = f * 6; k < f * 6 + 6; k++) {
+      batch.indices.push(index[k] - f * 4 + base);
+    }
+
+    batch.count += 4;
+  }
+}
 
 function createBuilding(x, z, w, d, h, material) {
   // Snap sizes so whole window columns and floors fit the facade texture.
@@ -573,13 +621,11 @@ function createBuilding(x, z, w, d, h, material) {
     const horizontal = face < 2 ? d : w;
     uv.setXY(i, uv.getX(i) * horizontal / 24, uv.getY(i) * h / 32);
   }
-  uv.needsUpdate = true;
 
-  const mesh = new THREE.Mesh(geo, [
-    material, material, roofMaterial, roofMaterial, material, material
-  ]);
-  mesh.position.set(x, h / 2 - .25, z);
-  world.add(mesh);
+  const centerY = h / 2 - .25;
+  addFaces(batchFor(material), geo, [0, 1, 4, 5], x, centerY, z);   // walls
+  addFaces(roofBatch, geo, [2], x, centerY, z);                     // roof
+  geo.dispose();
 
   buildings.push({ x, z, width: w, depth: d, height: h });
 
@@ -588,17 +634,42 @@ function createBuilding(x, z, w, d, h, material) {
   if (h > 28) {
     const units = 1 + Math.floor(Math.random() * 3);
     for (let i = 0; i < units; i++) {
-      box(
-        world,
+      roofDetailItems.push([
         x + rand(-w * .3, w * .3), roofY + .9, z + rand(-d * .3, d * .3),
-        rand(2.5, 4.5), 1.8, rand(2.5, 4.5), roofDetailMaterial
-      );
+        rand(2.5, 4.5), 1.8, rand(2.5, 4.5)
+      ]);
     }
   }
 
   if (h > 100 && Math.random() > .4) {
-    cylinder(world, x, roofY + 6, z, .25, 12, roofDetailMaterial);
+    roofDetailItems.push([x, roofY + 6, z, .5, 12, .5]);   // antenna
   }
+}
+
+function flushCity() {
+  const build = (batch, material) => {
+    if (!batch.count) return;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(batch.positions, 3));
+    geo.setAttribute("normal", new THREE.Float32BufferAttribute(batch.normals, 3));
+    geo.setAttribute("uv", new THREE.Float32BufferAttribute(batch.uvs, 2));
+    geo.setIndex(
+      batch.count > 65535
+        ? new THREE.Uint32BufferAttribute(batch.indices, 1)
+        : new THREE.Uint16BufferAttribute(batch.indices, 1)
+    );
+    geo.computeBoundingSphere();
+    world.add(new THREE.Mesh(geo, material));
+  };
+
+  for (const [material, batch] of buildingBatches) build(batch, material);
+  build(roofBatch, roofMaterial);
+
+  makeInstancedBoxes(roofDetailMaterial, roofDetailItems);
+  makeInstancedBoxes(mat.grass, parkGrassItems);
+  makeInstancedBoxes(mat.sidewalk, parkPathItems);
+  makeInstanced(cylinderGeo, mat.trunk, parkTrunkItems);
+  makeInstanced(sphereGeo, mat.tree, parkCrownItems);
 }
 
 function createCity() {
@@ -630,6 +701,8 @@ function createCity() {
       }
     }
   }
+
+  flushCity();
 }
 
 function createStreetlights() {
@@ -1037,7 +1110,8 @@ function createCar(color = 0xe33b2e, style = "sport", rich = false) {
     const rim = new THREE.Mesh(g.rim, alloy);
     const hub = new THREE.Mesh(g.hub, dark);
 
-    for (const m of [tire, rim, hub]) {
+    // Traffic cars skip the tiny hub cap to save draw calls
+    for (const m of rich ? [tire, rim, hub] : [tire, rim]) {
       m.rotation.order = "YXZ";          // steer (Y), then spin (X)
       m.rotation.z = Math.PI / 2;
       m.position.set(x, radius, z);
@@ -2765,9 +2839,18 @@ function updateTraffic(dt) {
         t.road + t.direction * CONFIG.ROAD_SPACING;
     }
 
-    const wheels = t.mesh.userData.wheels;
-    for (let i = 0; i < wheels.length; i++) {
-      wheels[i].rotation.x += t.speed * dt * .9;
+    // Far-away cars are hidden: fewer draw calls and no wheel animation
+    const cdx = t.mesh.position.x - camera.position.x;
+    const cdz = t.mesh.position.z - camera.position.z;
+    const lod = quality === 2 ? 420 : quality === 1 ? 300 : 200;
+    const near = cdx * cdx + cdz * cdz < lod * lod;
+    t.mesh.visible = near;
+
+    if (near) {
+      const wheels = t.mesh.userData.wheels;
+      for (let i = 0; i < wheels.length; i++) {
+        wheels[i].rotation.x += t.speed * dt * .9;
+      }
     }
   }
 }
@@ -2937,7 +3020,12 @@ function updatePedestrians(dt) {
     const gy = groundHeightAt(p.mesh.position.x, p.mesh.position.z);
     p.mesh.position.y += (gy - p.mesh.position.y) * Math.min(1, 12 * dt);
 
-    animateCharacter(p.mesh, dt, true, pace * 1.2, fleeing);
+    const pdx = p.mesh.position.x - camera.position.x;
+    const pdz = p.mesh.position.z - camera.position.z;
+    const pedLod = quality === 2 ? 260 : quality === 1 ? 180 : 120;
+    const pedNear = pdx * pdx + pdz * pdz < pedLod * pedLod;
+    p.mesh.visible = pedNear;
+    if (pedNear) animateCharacter(p.mesh, dt, true, pace * 1.2, fleeing);
   }
 }
 
@@ -3720,8 +3808,7 @@ const TOUCH_BUTTONS = [
   { label: "SPRINT", mode: "foot",  size: 68, right: 108, bottom: 8,   hold: "boost",      bg: "rgba(30,140,70,.8)" },
   { label: "ENTER",  mode: "foot",  size: 60, right: 14,  bottom: 110, tap: () => toggleVehicle() },
   { label: "FIRE",   mode: "foot",  size: 72, right: 90,  bottom: 96,  hold: "fire", bg: "rgba(200,40,40,.85)" },
-  { label: "RELOAD", mode: "foot",  size: 50, right: 176, bottom: 100, tap: () => startReload() },
-  { label: "GUN",    mode: "foot",  size: 50, right: 184, bottom: 10,  tap: () => cycleWeapon(1) }
+  { label: "RELOAD", mode: "foot",  size: 50, right: 176, bottom: 100, tap: () => startReload() }
 ];
 
 let touchBuilt = false;
@@ -3880,6 +3967,11 @@ function toggleFullscreen() {
   if (!active) {
     const request = element.requestFullscreen || element.webkitRequestFullscreen;
     if (request) request.call(element);
+    try {
+      if (screen.orientation && screen.orientation.lock) {
+        screen.orientation.lock("landscape").catch(() => {});
+      }
+    } catch (error) { /* not supported */ }
   } else {
     const exit = document.exitFullscreen || document.webkitExitFullscreen;
     if (exit) exit.call(document);
@@ -4639,7 +4731,7 @@ function getSfx() {
   try {
     const context = new AudioContextClass();
     const master = context.createGain();
-    master.gain.value = .6;
+    master.gain.value = .85;
     master.connect(context.destination);
 
     const buffer = context.createBuffer(1, context.sampleRate * 2, context.sampleRate);
@@ -4701,6 +4793,10 @@ function playThunder() {
   source.start(now);
   source.stop(now + 2.7);
 }
+
+["pointerdown", "keydown", "touchstart"].forEach(name => {
+  window.addEventListener(name, () => getSfx(), { once: true, passive: true });
+});
 
 let lightningTimer = 8;
 let lightningFlash = 0;
@@ -4841,9 +4937,9 @@ camera.lookAt(0, 0, 0);
    ========================================================= */
 
 const WEAPONS = [
-  { id: "pistol",  name: "PISTOL",  damage: 24, rate: .28, mag: 12, reserve: 72,  range: 140, pellets: 1, spread: .012, auto: false, reload: 1.1 },
-  { id: "smg",     name: "SMG",     damage: 11, rate: .085, mag: 30, reserve: 150, range: 110, pellets: 1, spread: .04,  auto: true,  reload: 1.6 },
-  { id: "shotgun", name: "SHOTGUN", damage: 9,  rate: .9,  mag: 6,  reserve: 30,  range: 50,  pellets: 8, spread: .09,  auto: false, reload: 2.0 }
+  { id: "pistol",  name: "PISTOL",  damage: 24, rate: .28, mag: 12, reserve: Infinity,  range: 140, pellets: 1, spread: .012, auto: false, reload: 1.1 },
+  { id: "smg",     name: "SMG",     damage: 11, rate: .085, mag: 30, reserve: Infinity, range: 110, pellets: 1, spread: .04,  auto: true,  reload: 1.6 },
+  { id: "shotgun", name: "SHOTGUN", damage: 9,  rate: .9,  mag: 6,  reserve: Infinity,  range: 50,  pellets: 8, spread: .09,  auto: false, reload: 2.0 }
 ];
 
 const ammo = WEAPONS.map(w => ({ mag: w.mag, reserve: w.reserve }));
@@ -5017,44 +5113,104 @@ function updateEffects(dt) {
 
 /* ---------- sound ---------- */
 
-function playGunSound(index) {
-  const audio = getSfx();
-  if (!audio) return;
-
-  const now = audio.context.currentTime;
-  const heavy = index === 2;
-  const duration = heavy ? .28 : .14;
-
-  const source = audio.context.createBufferSource();
+// One short burst of filtered noise
+function noiseBurst(audio, when, o) {
+  const ctx = audio.context;
+  const source = ctx.createBufferSource();
   source.buffer = audio.buffer;
-  source.playbackRate.value = .8 + Math.random() * .4;
+  source.playbackRate.value = o.rate || 1;
 
-  const filter = audio.context.createBiquadFilter();
-  filter.type = "bandpass";
-  filter.frequency.value = heavy ? 900 : 1700;
-  filter.Q.value = .7;
+  const filter = ctx.createBiquadFilter();
+  filter.type = o.type || "bandpass";
+  filter.frequency.value = o.freq;
+  filter.Q.value = o.q || .8;
 
-  const gain = audio.context.createGain();
-  gain.gain.setValueAtTime(heavy ? .9 : .6, now);
-  gain.gain.exponentialRampToValueAtTime(.001, now + duration);
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(o.gain, when);
+  gain.gain.exponentialRampToValueAtTime(.001, when + o.duration);
 
   source.connect(filter);
   filter.connect(gain);
   gain.connect(audio.master);
-  source.start(now);
-  source.stop(now + duration + .05);
+  source.start(when, Math.random() * .9);
+  source.stop(when + o.duration + .03);
+}
 
-  const thump = audio.context.createOscillator();
-  const thumpGain = audio.context.createGain();
-  thump.type = "sine";
-  thump.frequency.setValueAtTime(heavy ? 120 : 160, now);
-  thump.frequency.exponentialRampToValueAtTime(45, now + .12);
-  thumpGain.gain.setValueAtTime(.5, now);
-  thumpGain.gain.exponentialRampToValueAtTime(.001, now + .14);
-  thump.connect(thumpGain);
-  thumpGain.connect(audio.master);
-  thump.start(now);
-  thump.stop(now + .16);
+// One short pitched tone (boom, thunk, tick)
+function toneBurst(audio, when, from, to, duration, volume, type = "sine") {
+  const ctx = audio.context;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(from, when);
+  osc.frequency.exponentialRampToValueAtTime(Math.max(20, to), when + duration);
+  gain.gain.setValueAtTime(volume, when);
+  gain.gain.exponentialRampToValueAtTime(.001, when + duration);
+  osc.connect(gain);
+  gain.connect(audio.master);
+  osc.start(when);
+  osc.stop(when + duration + .02);
+}
+
+function mechanicalClick(audio, when, freq, volume, duration) {
+  noiseBurst(audio, when, { duration, freq, q: 3, gain: volume });
+  toneBurst(audio, when, freq * .5, freq * .3, duration, volume * .35, "square");
+}
+
+function playGunSound(index) {
+  const audio = getSfx();
+  if (!audio) return;
+
+  const t = audio.context.currentTime;
+  const kind = WEAPONS[index].id;
+
+  if (kind === "shotgun") {
+    noiseBurst(audio, t, { duration: .35, freq: 600, q: .5, gain: 1, rate: .7 });
+    noiseBurst(audio, t, { duration: .12, freq: 3500, type: "highpass", gain: .8 });
+    toneBurst(audio, t, 110, 38, .3, .9);
+    noiseBurst(audio, t + .12, { duration: .3, freq: 500, q: .5, gain: .25, rate: .6 });
+    // pump action after the shot
+    mechanicalClick(audio, t + .38, 900, .5, .06);
+    mechanicalClick(audio, t + .55, 1300, .55, .06);
+  } else if (kind === "smg") {
+    noiseBurst(audio, t, { duration: .1, freq: 1800, q: .7, gain: .75 });
+    noiseBurst(audio, t, { duration: .06, freq: 3200, type: "highpass", gain: .5 });
+    toneBurst(audio, t, 180, 60, .09, .55);
+  } else {
+    noiseBurst(audio, t, { duration: .16, freq: 1400, q: .7, gain: .85 });
+    noiseBurst(audio, t, { duration: .08, freq: 3000, type: "highpass", gain: .7 });
+    toneBurst(audio, t, 150, 55, .12, .7);
+    noiseBurst(audio, t + .09, { duration: .22, freq: 900, q: .6, gain: .18, rate: .8 });
+  }
+}
+
+// Magazine out, magazine in, slide (or shells and pump for the shotgun)
+function playReloadSound(index, total) {
+  const audio = getSfx();
+  if (!audio) return;
+
+  const t = audio.context.currentTime;
+
+  if (WEAPONS[index].id === "shotgun") {
+    const span = Math.max(.4, total - .9);
+    for (let i = 0; i < 4; i++) {
+      mechanicalClick(audio, t + .25 + i * span / 4, 1500, .4, .05);
+    }
+    mechanicalClick(audio, t + total - .5, 900, .65, .06);
+    mechanicalClick(audio, t + total - .2, 1300, .7, .06);
+  } else {
+    mechanicalClick(audio, t + .05, 900, .55, .07);            // magazine out
+    toneBurst(audio, t + .08, 300, 150, .08, .3);
+    mechanicalClick(audio, t + total * .55, 1600, .65, .05);   // magazine in
+    toneBurst(audio, t + total * .55, 260, 140, .08, .35);
+    mechanicalClick(audio, t + total - .22, 1000, .65, .06);   // slide back
+    mechanicalClick(audio, t + total - .08, 2000, .75, .05);   // slide release
+  }
+}
+
+function playDryClick() {
+  const audio = getSfx();
+  if (audio) mechanicalClick(audio, audio.context.currentTime, 2400, .4, .03);
 }
 
 /* ---------- ray casting (flat, top-down) ---------- */
@@ -5141,7 +5297,7 @@ function findAimAngle(range) {
     const diff = Math.atan2(
       Math.sin(angle - playerRotation), Math.cos(angle - playerRotation)
     );
-    if (Math.abs(diff) > .2) return;
+    if (Math.abs(diff) > (touchUIActive ? .32 : .2)) return;
 
     const score = Math.abs(diff) * 40 + dist * .1;
     if (score < bestScore) { bestScore = score; best = angle; }
@@ -5224,6 +5380,7 @@ function startReload() {
 
   reloading = true;
   reloadTimer = w.reload;
+  playReloadSound(currentWeapon, w.reload);
   showMessage("RELOADING...");
 }
 
@@ -5329,7 +5486,7 @@ function createPickups() {
     roadLines.forEach((q, j) => {
       if ((i * 3 + j * 5) % 7 !== 0) return;
 
-      const med = (i + j) % 2 === 0;
+      const med = true;   // ammo is unlimited now, so every crate is a medkit
       const group = new THREE.Group();
       group.position.set(p + 15, 1.1, q + 15);
 
@@ -5402,11 +5559,15 @@ function updatePickups(dt) {
 
 const combatStyle = document.createElement("style");
 combatStyle.textContent = `
-#vice-combat{position:fixed;left:16px;bottom:16px;z-index:9000;display:none;pointer-events:none;font-family:Arial,sans-serif;color:#fff;text-shadow:0 1px 3px #000;min-width:170px}
+#vice-combat{position:fixed;left:50%;bottom:calc(58px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);width:min(300px,56vw);z-index:9000;display:none;pointer-events:none;font-family:Arial,sans-serif;color:#fff;text-shadow:0 1px 3px #000}
 #vice-hp-label{display:flex;justify-content:space-between;font-size:11px;font-weight:bold;letter-spacing:1px;margin-bottom:3px}
 #vice-hp-track{height:12px;border-radius:6px;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.35);overflow:hidden}
 #vice-hp-fill{height:100%;width:100%;background:#4cd37b}
-#vice-weapon{margin-top:6px;font-size:13px;font-weight:bold;letter-spacing:.8px}
+#vice-weapon{display:flex;justify-content:space-between;align-items:center;margin-top:5px;font-size:12px;font-weight:bold;letter-spacing:.8px}
+#vice-weapon-row{display:flex;gap:6px;margin-top:5px;pointer-events:auto}
+.vice-slot{flex:1;min-width:0;height:30px;padding:0;border:2px solid rgba(255,255,255,.6);border-radius:8px;background:rgba(12,24,36,.72);color:#fff;font:900 11px Arial,sans-serif;cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+.vice-slot.sel{background:rgba(214,166,46,.92);color:#111;border-color:#fff0a8;text-shadow:none}
+.vice-slot.reload{flex:0 0 40px}
 #vice-crosshair{position:fixed;left:50%;top:50%;width:22px;height:22px;margin:-11px 0 0 -11px;z-index:9000;pointer-events:none;display:none}
 #vice-crosshair::before,#vice-crosshair::after{content:"";position:absolute;background:rgba(255,255,255,.9);box-shadow:0 0 2px #000}
 #vice-crosshair::before{left:10px;top:0;width:2px;height:22px}
@@ -5415,7 +5576,11 @@ combatStyle.textContent = `
 #vice-damage{position:fixed;left:0;top:0;right:0;bottom:0;z-index:8999;pointer-events:none;background:radial-gradient(ellipse at center,rgba(255,0,0,0) 45%,rgba(200,0,0,.8) 100%);opacity:0}
 #vice-wasted{position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483004;display:none;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,.55);color:#e0392d;font:900 64px Arial,sans-serif;letter-spacing:6px;pointer-events:none;text-shadow:0 3px 12px #000}
 #vice-wasted small{font-size:18px;color:#fff;letter-spacing:2px;margin-top:10px}
-body.vice-touch #vice-combat{left:50%;transform:translateX(-50%);bottom:calc(10px + env(safe-area-inset-bottom,0px));min-width:150px;text-align:center}
+/* Phones: the health / gun panel and stamina bar share the free space between the joystick and the buttons */
+body.vice-touch #vice-combat{width:clamp(130px,calc(100vw - 530px),240px);bottom:calc(52px + env(safe-area-inset-bottom,0px))}
+body.vice-touch #vice-bars{top:auto;bottom:calc(12px + env(safe-area-inset-bottom,0px));width:clamp(130px,calc(100vw - 530px),240px)}
+body.vice-touch .vice-slot{height:34px;font-size:10px}
+body.vice-touch #vice-weapon{font-size:11px}
 @media(max-width:700px){#vice-wasted{font-size:40px}}
 `;
 document.head.appendChild(combatStyle);
@@ -5425,12 +5590,43 @@ combatPanel.id = "vice-combat";
 combatPanel.innerHTML =
   '<div id="vice-hp-label"><span>HEALTH</span><span id="vice-hp-text">100</span></div>' +
   '<div id="vice-hp-track"><div id="vice-hp-fill"></div></div>' +
-  '<div id="vice-weapon"></div>';
+  '<div id="vice-weapon"><span id="vice-weapon-name"></span><span id="vice-weapon-ammo"></span></div>' +
+  '<div id="vice-weapon-row"></div>';
 document.body.appendChild(combatPanel);
 
 const hpText = document.getElementById("vice-hp-text");
 const hpFill = document.getElementById("vice-hp-fill");
-const weaponText = document.getElementById("vice-weapon");
+const weaponName = document.getElementById("vice-weapon-name");
+const weaponAmmo = document.getElementById("vice-weapon-ammo");
+const weaponRow = document.getElementById("vice-weapon-row");
+
+// Tap / click buttons for each gun and reload (work with mouse and touch)
+const slotButtons = [];
+
+function makeSlotButton(label, action, extraClass = "") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.tabIndex = -1;
+  button.className = "vice-slot " + extraClass;
+  button.textContent = label;
+  // Never keep keyboard focus, otherwise Space would "click" it again
+  button.addEventListener("mousedown", event => event.preventDefault());
+  button.addEventListener("click", () => {
+    action();
+    button.blur();
+  });
+  weaponRow.appendChild(button);
+  return button;
+}
+
+const SLOT_LABELS = touchCapable
+  ? ["1 PST", "2 SMG", "3 SG"]
+  : ["1 PISTOL", "2 SMG", "3 SHOTGUN"];
+
+WEAPONS.forEach((w, i) => {
+  slotButtons.push(makeSlotButton(SLOT_LABELS[i], () => selectWeapon(i)));
+});
+makeSlotButton("R", () => startReload(), "reload");
 
 const crosshair = document.createElement("div");
 crosshair.id = "vice-crosshair";
@@ -5472,17 +5668,24 @@ function updateCombatHud(dt) {
     hpFill.style.background = hp > 60 ? "#4cd37b" : hp > 30 ? "#f0b429" : "#e0483a";
   }
 
-  let label;
+  let nameLabel, ammoLabel;
   if (currentWeapon < 0) {
-    label = touchUIActive ? "UNARMED" : "UNARMED  [1-3] DRAW GUN";
+    nameLabel = "UNARMED";
+    ammoLabel = touchUIActive ? "" : "[1-3] DRAW";
   } else {
-    const w = WEAPONS[currentWeapon];
-    label = w.name + "  " + ammo[currentWeapon].mag + " / " + ammo[currentWeapon].reserve +
-      (reloading ? "  RELOADING" : "");
+    const stock = ammo[currentWeapon];
+    nameLabel = WEAPONS[currentWeapon].name;
+    ammoLabel = reloading
+      ? "RELOADING..."
+      : stock.mag + " / " + (stock.reserve === Infinity ? "∞" : stock.reserve);
   }
+
+  const label = nameLabel + "|" + ammoLabel + "|" + currentWeapon;
   if (label !== lastWeaponLabel) {
     lastWeaponLabel = label;
-    weaponText.textContent = label;
+    weaponName.textContent = nameLabel;
+    weaponAmmo.textContent = ammoLabel;
+    slotButtons.forEach((b, i) => b.classList.toggle("sel", i === currentWeapon));
   }
 
   const aiming = currentWeapon >= 0 && !driving && !playerDead;
@@ -5531,10 +5734,18 @@ function updateCombat(dt) {
     const w = WEAPONS[currentWeapon];
     const wants = w.auto ? held : (held && !firePrev);
 
-    if (wants && !reloading && fireCooldown <= 0) {
-      if (ammo[currentWeapon].mag > 0) playerFire();
-      else if (ammo[currentWeapon].reserve > 0) startReload();
-      else if (!firePrev) showMessage("OUT OF AMMO");
+    if (wants && fireCooldown <= 0) {
+      if (reloading) {
+        // Trigger pulled with an empty gun while reloading
+        if (!firePrev && ammo[currentWeapon].mag === 0) {
+          playDryClick();
+          fireCooldown = .3;
+        }
+      } else if (ammo[currentWeapon].mag > 0) {
+        playerFire();
+      } else {
+        startReload();
+      }
     }
   }
   firePrev = held;
@@ -5633,7 +5844,7 @@ function applyQuality(level) {
   for (const bird of skyBirds) bird.visible = high;
   for (const cloud of skyClouds) cloud.visible = level > 0;
 
-  pixelRatio = level === 0 ? .75 : Math.min(devicePixelRatio || 1, 1);
+  pixelRatio = level === 0 ? (touchCapable ? .7 : .75) : Math.min(devicePixelRatio || 1, 1);
   renderer.setPixelRatio(pixelRatio);
   renderer.setSize(innerWidth, innerHeight);
 }
@@ -5727,7 +5938,7 @@ function animate() {
 
     minimapTimer += dt;
 
-    if (minimapTimer >= .125) {
+    if (minimapTimer >= (touchUIActive ? .2 : .125)) {
       drawMinimap();
       minimapTimer = 0;
     }

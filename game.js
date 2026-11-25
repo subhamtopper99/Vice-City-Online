@@ -1,7 +1,7 @@
 import * as THREE from "https://esm.sh/three@0.160.0";
 
 /* =========================================================
-   VICE CITY — UPDATE 30
+   VICE CITY — UPDATE 31
    Complete game.js
    Original Update 23 visuals preserved.
    Multiplayer connection and reconnection improvements.
@@ -1402,6 +1402,17 @@ function animateCharacter(c, dt, moving, speed = 1, sprint = false) {
     d.walkTime += dt * Math.min(18, 5 + speed * 2.2 + d.runBlend * 3);
   }
 
+  if (d.seated) {
+    const driver = d.seatIndex === 0;
+    d.legs[0].rotation.x = d.legs[1].rotation.x = -1.45;
+    d.knees[0].rotation.x = d.knees[1].rotation.x = 1.5;
+    d.arms[0].rotation.x = d.arms[1].rotation.x = driver ? -.95 : -.5;
+    d.elbows[0].rotation.x = d.elbows[1].rotation.x = driver ? -.5 : -.9;
+    d.upper.rotation.x = .02;
+    d.rig.position.y = -.18;
+    return;
+  }
+
   if (d.airborne) {
     d.arms[0].rotation.x = -1;
     d.arms[1].rotation.x = -.8;
@@ -1511,6 +1522,7 @@ const carMatsRich = makeCarMaterials(true);
 const carMatsBasic = makeCarMaterials(false);
 const carLampMat = new THREE.MeshBasicMaterial({ color: 0xfff1cf });
 const plateMat = new THREE.MeshLambertMaterial({ color: 0xeeeeea });
+const carGlassClear = new THREE.MeshLambertMaterial({ color: 0x183746, transparent: true, opacity: .5 });
 
 const carShadowGeo = new THREE.PlaneGeometry(1, 1);
 const carShadowMat = new THREE.MeshBasicMaterial({
@@ -1548,7 +1560,8 @@ const CAR_DESIGN = {
     wheels: { x: 1.2, zf: 1.48, zr: -1.5, r: .43, w: .29 },
     lamp: [.78, .8, 2.24, .46, .12], tail: [.8, .9, -2.27, .5, .12], grilleY: .64,
     mirror: [1.27, 1.35, .65], plateY: .72, plateF: 2.3, plateR: -2.3, tailZ: -2.3,
-    cockpit: [.42, 1.36, -.05], doors: [.45, -.7], skirt: [-.01, 2.08], exhaust: true
+    cockpit: [.42, 1.36, -.05], doors: [.45, -.7],
+    seats: [[.42, 1.36, -.05], [-.42, 1.36, -.05]], skirt: [-.01, 2.08], exhaust: true
   },
   supercar: {
     width: 2.35, front: 2.25, rear: -2.28,
@@ -1559,7 +1572,8 @@ const CAR_DESIGN = {
     wheels: { x: 1.18, zf: 1.48, zr: -1.5, r: .43, w: .29 },
     lamp: [.78, .74, 2.28, .6, .1], tail: [.85, .84, -2.31, .5, .1], grilleY: .56,
     mirror: [1.22, 1.08, .5], plateY: .6, plateF: 2.34, plateR: -2.34, tailZ: -2.3,
-    cockpit: [.4, 1.12, -.15], doors: [.35, -.8], skirt: [-.01, 2.08], exhaust: true, vent: true, wing: true
+    cockpit: [.4, 1.12, -.15], doors: [.35, -.8],
+    seats: [[.4, 1.12, -.15], [-.4, 1.12, -.15]], skirt: [-.01, 2.08], exhaust: true, vent: true, wing: true
   },
   suv: {
     width: 2.65, front: 2.38, rear: -2.4,
@@ -1570,7 +1584,8 @@ const CAR_DESIGN = {
     wheels: { x: 1.35, zf: 1.5, zr: -1.52, r: .53, w: .34 },
     lamp: [.92, 1.14, 2.42, .5, .22], tail: [.95, 1.15, -2.43, .5, .2], grilleY: .98,
     mirror: [1.43, 2.0, .9], plateY: .95, plateF: 2.46, plateR: -2.46, tailZ: -2.45,
-    cockpit: [.5, 2.0, .25], doors: [.6, -.5, -1.55], skirt: [0, 2.2], rails: true
+    cockpit: [.5, 2.0, .25], doors: [.6, -.5, -1.55],
+    seats: [[.5, 2.0, .25], [-.5, 2.0, .25], [.7, 2.0, -.7], [0, 2.0, -.7], [-.7, 2.0, -.7], [.5, 2.0, -1.6], [-.5, 2.0, -1.6]], skirt: [0, 2.2], rails: true
   },
   sedan: {
     width: 2.48, front: 2.4, rear: -2.42,
@@ -1581,7 +1596,8 @@ const CAR_DESIGN = {
     wheels: { x: 1.23, zf: 1.52, zr: -1.55, r: .43, w: .29 },
     lamp: [.8, .92, 2.44, .5, .14], tail: [.82, .98, -2.45, .55, .14], grilleY: .72,
     mirror: [1.3, 1.68, .8], plateY: .85, plateF: 2.48, plateR: -2.48, tailZ: -2.45,
-    cockpit: [.45, 1.62, .2], doors: [.6, -.45, -1.4], skirt: [-.02, 2.3], exhaust: true
+    cockpit: [.45, 1.62, .2], doors: [.6, -.45, -1.4],
+    seats: [[.45, 1.62, .2], [-.45, 1.62, .2], [.6, 1.62, -.8], [0, 1.62, -.8], [-.6, 1.62, -.8]], skirt: [-.02, 2.3], exhaust: true
   },
   jeep: {
     width: 2.55, front: 2.2, rear: -2.2,
@@ -1592,7 +1608,8 @@ const CAR_DESIGN = {
     wheels: { x: 1.3, zf: 1.42, zr: -1.38, r: .55, w: .38 },
     lamp: [.85, 1.42, 2.25, .4, .4], tail: [1.0, 1.28, -2.23, .4, .2], grilleY: 1.38, round: true, slats: true, spare: true,
     mirror: [1.4, 1.95, 1.0], plateY: 1.0, plateF: 2.31, plateR: -2.25, tailZ: -2.3,
-    cockpit: [.5, 1.95, 0], doors: [.4, -.55], skirt: [0, 1.9], rails: true
+    cockpit: [.5, 1.95, 0], doors: [.4, -.55],
+    seats: [[.5, 1.95, 0], [-.5, 1.95, 0], [.5, 1.95, -1.2], [-.5, 1.95, -1.2]], skirt: [0, 1.9], rails: true
   }
 };
 
@@ -1632,7 +1649,7 @@ function strut(parent, x, z1, y1, z2, y2, thickness, material) {
 const roundLampGeo = new THREE.CylinderGeometry(.2, .2, .09, 12);
 const steeringWheelGeo = new THREE.TorusGeometry(.2, .03, 6, 14);
 
-function createCar(color = 0xe33b2e, style = "sport", rich = false) {
+function createCar(color = 0xe33b2e, style = "sport", rich = false, seatView = false) {
   const car = new THREE.Group();
   car.rotation.order = "YXZ";   // yaw first, then pitch / roll
   const spec = VEHICLES[style] || VEHICLES.sport;
@@ -1644,7 +1661,9 @@ function createCar(color = 0xe33b2e, style = "sport", rich = false) {
     : new THREE.MeshLambertMaterial({ color });
 
   const M = rich ? carMatsRich : carMatsBasic;
-  const { dark, glass, rubber, alloy } = M;
+  const { dark, rubber, alloy } = M;
+  // seatView: other players' cars show see-through glass so you can see who is inside
+  const glass = rich ? M.glass : seatView ? carGlassClear : M.glass;
   const lamp = carLampMat;
   const redLamp = new THREE.MeshBasicMaterial({ color: TAIL_DIM });
 
@@ -1773,12 +1792,12 @@ function createCar(color = 0xe33b2e, style = "sport", rich = false) {
   }
 
   /* ----- interior (visible through the glass on the player's car) ----- */
-  if (rich) {
+  if (rich || seatView) {
     const [cx, cy, cz] = design.cockpit;
 
-    for (const sx of [cx, -cx]) {
-      part(sx, cy - .62, cz - .15, .52, .14, .55, dark);       // seat
-      part(sx, cy - .3, cz - .45, .52, .6, .12, dark);         // back rest
+    for (const [sx, sy, sz] of design.seats) {
+      part(sx, sy - .62, sz - .15, .52, .14, .55, dark);       // seat
+      part(sx, sy - .3, sz - .45, .52, .6, .12, dark);         // back rest
     }
 
     part(0, cy - .42, cz + .7, W * .62, .26, .5, dark);        // dashboard
@@ -1818,6 +1837,7 @@ function createCar(color = 0xe33b2e, style = "sport", rich = false) {
   car.userData.style = style;
   car.userData.spec = spec;
   car.userData.cockpit = design.cockpit;
+  car.userData.seats = design.seats;
   car.userData.vehicleName = spec.name;
   return car;
 }
@@ -2202,6 +2222,14 @@ function jump() {
 function updateJump(dt) {
   const gy = groundHeightAt(player.position.x, player.position.z);
 
+  if (ridingIn) {
+    jumpOffset = 0;
+    verticalVelocity = 0;
+    jumping = false;
+    playerGround = player.position.y;
+    return;
+  }
+
   if (driving) {
     jumpOffset = 0;
     verticalVelocity = 0;
@@ -2459,6 +2487,9 @@ function removeRemotePlayer(id) {
   const remote = remotePlayers.get(id);
   if (!remote) return;
 
+  if (remote.avatar.parent) remote.avatar.parent.remove(remote.avatar);
+  seated.delete(id);
+
   scene.remove(remote.root);
 
   // Geometry and most materials are shared, so only free per-player assets.
@@ -2476,6 +2507,11 @@ function removeRemotePlayer(id) {
 function clearRemotePlayers() {
   for (const id of [...remotePlayers.keys()]) {
     removeRemotePlayer(id);
+  }
+  seated.clear();
+  if (ridingIn) {
+    ridingIn = null;
+    player.visible = !driving;
   }
   updatePlayerCount();
 }
@@ -2595,7 +2631,7 @@ function addRemotePlayer(data) {
   const avatar = createCharacter(STREET_BLUE, gender);
   const vehicle = createCar(
     Number.isFinite(data.color) ? data.color : 0x2874bb,
-    type
+    type, false, true
   );
   const nameTag = createNameTag(data.name || "Driver");
 
@@ -2640,6 +2676,7 @@ socket.on("players:init", players => {
 
 socket.on("player:joined", data => {
   addRemotePlayer(data);
+  setTimeout(announceState, 500);
 
   if (data?.name) {
     showMessage(data.name + " JOINED THE CITY");
@@ -2675,13 +2712,13 @@ socket.on("player:update", data => {
   remote.driving = data.driving === true;
   remote.jumping = data.jumping === true;
   remote.avatar.userData.airborne = remote.jumping;
-  if (Number.isFinite(data.weapon)) setCharacterGun(remote.avatar, data.weapon);
+  if (Number.isFinite(data.weapon)) remote.weapon = data.weapon;
   remote.speed = Number.isFinite(data.speed) ? data.speed : 0;
 
   const gender = data.gender === "female" ? "female" : "male";
 
   if (gender !== remote.gender) {
-    remote.root.remove(remote.avatar);
+    if (remote.avatar.parent) remote.avatar.parent.remove(remote.avatar);
     remote.avatar = createCharacter(STREET_BLUE, gender);
     remote.root.add(remote.avatar);
     remote.gender = gender;
@@ -2694,7 +2731,7 @@ socket.on("player:update", data => {
     remote.root.remove(remote.vehicle);
     remote.vehicle = createCar(
       Number.isFinite(data.color) ? data.color : 0x2874bb,
-      data.vehicleType
+      data.vehicleType, false, true
     );
     remote.root.add(remote.vehicle);
     remote.vehicleType = data.vehicleType;
@@ -2711,6 +2748,8 @@ socket.on("player:left", id => {
 
 function updateRemotePlayers(dt) {
   const smoothing = 1 - Math.pow(.002, dt);
+
+  validateSeats();
 
   for (const remote of remotePlayers.values()) {
     remote.root.position.lerp(remote.targetPosition, smoothing);
@@ -2737,6 +2776,10 @@ function updateRemotePlayers(dt) {
         wheel.rotation.x += remote.speed * dt * .15;
       });
     }
+
+    // Guns synced from other players, then seat layout (inside vehicles)
+    if (!remote.driving && remote.weapon !== undefined) setCharacterGun(remote.avatar, remote.weapon);
+    layoutRemoteSeat(remote);
   }
 }
 
@@ -2900,6 +2943,11 @@ chatInput.addEventListener("keydown", event => {
 });
 
 socket.on("chat:message", data => {
+  if (data?.message && String(data.message).startsWith(NET_PREFIX)) {
+    handleChatNet(data);
+    return;
+  }
+
   if (data?.message) {
     addChatLine(
       data.name || "Driver",
@@ -3754,6 +3802,7 @@ window.addEventListener("keydown", event => {
   if ((key === "-" || key === "_") && started) zoomBy(1.14);
   if (key === "l" && !event.repeat && started) toggleMouseLock();
   if (key === "x" && !event.repeat && started) cycleWeapon(1);
+  if (key === "k" && !event.repeat && started) cycleSeat();
 
   if (key === "c" && !event.repeat && driving) {
     const color = pick(carPaints);
@@ -3799,9 +3848,22 @@ bindMobileControl("right", "right");
 function toggleVehicle() {
   if (!started || paused || chatOpen || garageOpen) return;
 
+  if (ridingIn) {
+    leaveSeat(false);
+    return;
+  }
+
   if (!driving) {
+    // Another player's vehicle that is closer than mine: get in as a passenger
+    const host = findBoardableRemote();
+    if (host && host.dist < player.position.distanceTo(car.position)) {
+      boardRemoteVehicle(host.remote);
+      return;
+    }
+
     if (player.position.distanceTo(car.position) < 9) {
       driving = true;
+      mySeat = 0;
       engineRunning = false;
       carSpeed = 0;
       jumping = false;
@@ -3844,6 +3906,7 @@ function toggleVehicle() {
   }
 
   driving = false;
+  mySeat = 0;
   setEngineRunning(false);
   player.visible = true;
   playerGround = groundHeightAt(spot[0], spot[1]);
@@ -3861,6 +3924,19 @@ function toggleVehicle() {
 const walkDirection = new THREE.Vector3();
 
 function updatePlayer(dt) {
+  if (ridingIn) {
+    const host = remotePlayers.get(ridingIn.driverId);
+    if (host) {
+      player.position.set(host.root.position.x, host.root.position.y, host.root.position.z);
+      playerRotation = host.root.rotation.y;
+      player.rotation.y = playerRotation;
+    }
+    playerSpeedNow = 0;
+    strafeNow = 0;
+    sprinting = false;
+    return;
+  }
+
   if (driving) {
     playerSpeedNow = 0;
     strafeNow = 0;
@@ -3964,7 +4040,7 @@ function updateCar(dt) {
   crashCooldown = Math.max(0, crashCooldown - dt);
   const spec = car.userData.spec;
   const locked = chatOpen || garageOpen || playerDead;
-  const driver = driving && engineRunning && !locked;
+  const driver = driving && engineRunning && !locked && mySeat === 0;
 
   // Parked and still: nothing to simulate
   if (!driving && carVel.lengthSq() < .0004) {
@@ -4222,8 +4298,8 @@ function togglePOV() {
 function applyLook(dx, dy) {
   lastLookTime = performance.now();
 
-  if (!driving) playerRotation -= dx * MOUSE_SENS;
-  else lookYaw = clamp(lookYaw - dx * MOUSE_SENS, -2.6, 2.6);
+  if (!driving && !ridingIn) playerRotation -= dx * MOUSE_SENS;
+  else lookYaw = clamp(lookYaw - dx * MOUSE_SENS, -3.1, 3.1);
 
   lookPitch = clamp(lookPitch - dy * MOUSE_SENS, -1.1, 1.1);
 }
@@ -4254,8 +4330,20 @@ function toggleMouseLock() {
 function updateFirstPersonCamera(dt) {
   let px, py, pz, yaw;
 
-  if (driving) {
-    const c = car.userData.cockpit;
+  const host = ridingIn ? remotePlayers.get(ridingIn.driverId) : null;
+
+  if (host) {
+    const seats = host.vehicle.userData.seats || [];
+    const c = seats[ridingIn.seat] || host.vehicle.userData.cockpit;
+    const heading = host.root.rotation.y;
+    const cos = Math.cos(heading), sin = Math.sin(heading);
+    px = host.root.position.x + c[0] * cos + c[2] * sin;
+    pz = host.root.position.z - c[0] * sin + c[2] * cos;
+    py = host.root.position.y + c[1];
+    yaw = heading + lookYaw;
+  } else if (driving) {
+    const seats = car.userData.seats || [];
+    const c = seats[mySeat] || car.userData.cockpit;
     const cos = Math.cos(carRotation), sin = Math.sin(carRotation);
     px = car.position.x + c[0] * cos + c[2] * sin;
     pz = car.position.z - c[0] * sin + c[2] * cos;
@@ -4308,23 +4396,26 @@ function updateCamera(dt) {
   }
 
   // Free look eases back to centre when the mouse / finger is idle
-  if (driving && performance.now() - lastLookTime > 1000) {
+  if ((driving || ridingIn) && !isLookDragging() && performance.now() - lastLookTime > 1000) {
     lookYaw *= Math.exp(-3 * dt);
     lookPitch *= Math.exp(-2 * dt);
   }
-  if (!driving) lookYaw = 0;
+  if (!driving && !ridingIn) lookYaw = 0;
 
   // The body is hidden in first person
-  if (!driving) player.visible = !firstPerson;
+  if (!driving && !ridingIn) player.visible = !firstPerson;
 
   if (firstPerson) {
     updateFirstPersonCamera(dt);
     return;
   }
 
-  const target = driving ? car : player;
-  const heading = (driving ? carRotation : playerRotation) + (driving ? lookYaw : 0);
-  const kmh = Math.abs(carSpeed) * 3.6;
+  const host = ridingIn ? remotePlayers.get(ridingIn.driverId) : null;
+  const inVehicle = driving || !!host;
+  const target = host ? host.root : (driving ? car : player);
+  const heading = (host ? host.root.rotation.y : (driving ? carRotation : playerRotation)) +
+    (inVehicle ? lookYaw : 0);
+  const kmh = host ? Math.abs(host.speed) * 3.6 : Math.abs(carSpeed) * 3.6;
 
   // The camera swings round gently behind the vehicle instead of snapping
   const diff = Math.atan2(
@@ -4332,13 +4423,13 @@ function updateCamera(dt) {
   );
   camHeading += diff * (1 - Math.exp(-(driving ? 6 : 10) * dt));
 
-  const distanceTarget = (driving
+  const distanceTarget = (inVehicle
     ? 14 + Math.min(kmh / 70, 4) + (nitroActive ? 2 : 0)
     : 9.5 + (sprinting ? 1 : 0)) * camZoom;
   camDistance += (distanceTarget - camDistance) * (1 - Math.exp(-5 * dt));
 
-  const height = (driving ? 6.6 + Math.min(kmh / 150, 1.2) : 5.2) * (.3 + .7 * camZoom);
-  const lookHeight = driving ? 1.6 : 1.8;
+  const height = (inVehicle ? 6.6 + Math.min(kmh / 150, 1.2) : 5.2) * (.3 + .7 * camZoom);
+  const lookHeight = inVehicle ? 1.6 : 1.8;
 
   // Curb bumps and jumps do not jerk the camera
   camFocusY += (target.position.y - camFocusY) * (1 - Math.exp(-8 * dt));
@@ -4354,7 +4445,7 @@ function updateCamera(dt) {
   }
 
   cameraPosition.set(px, camFocusY + height + lookPitch * camDistance * .6, pz);
-  camera.position.lerp(cameraPosition, 1 - Math.exp(-(driving ? 12 : 10) * dt));
+  camera.position.lerp(cameraPosition, 1 - Math.exp(-(inVehicle ? 12 : 10) * dt));
 
   const shake = camShake + (nitroActive ? .08 : 0);
   if (shake > .01) {
@@ -4365,7 +4456,7 @@ function updateCamera(dt) {
 
   camera.lookAt(cameraTarget);
 
-  const targetFov = 65 + (driving
+  const targetFov = 65 + (inVehicle
     ? Math.min(kmh / 300, 1) * 10 + (nitroActive ? 9 : 0)
     : (sprinting ? 6 : 0));
   fovCurrent += (targetFov - fovCurrent) * (1 - Math.exp(-4 * dt));
@@ -4454,28 +4545,84 @@ function updateBars() {
   }
 }
 
+const moneyStyle = document.createElement("style");
+moneyStyle.textContent = `
+#vice-money{position:fixed;right:12px;top:12px;z-index:10000;display:none;padding:3px 8px;border-radius:6px;background:rgba(0,0,0,.6);border-left:3px solid #ffd45b;color:#ffd45b;font:bold 11px Arial,sans-serif;letter-spacing:.5px;text-align:center;pointer-events:none;box-sizing:border-box;white-space:nowrap}
+`;
+document.head.appendChild(moneyStyle);
+
+const moneyBadge = document.createElement("div");
+moneyBadge.id = "vice-money";
+document.body.appendChild(moneyBadge);
+
+let lastMoneyLabel = "";
+
+function updateMoneyBadge() {
+  const label =
+    "$" + cash.toLocaleString("en-US") + "  ·  CP " +
+    (checkpointIndex + 1) + "/" + checkpoints.length;
+
+  if (label !== lastMoneyLabel) {
+    lastMoneyLabel = label;
+    moneyBadge.textContent = label;
+  }
+}
+
+// The old cash / speed / mode / mission read-outs are replaced by the small
+// badges above, so hide them (and any panel that only held them).
+function hideLegacyHud() {
+  const keep = [
+    document.body, document.documentElement, missionPanel, minimap,
+    connectionElement, playerCountElement, hud.message
+  ].filter(Boolean);
+
+  const rows = [];
+
+  for (const id of ["speed", "cash", "mode", "mission", "progress"]) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+
+    el.style.setProperty("display", "none", "important");
+
+    let row = el.parentElement;
+    const blocked = !row || keep.includes(row) ||
+      keep.some(k => k !== row && row.contains(k)) ||
+      row.querySelector("canvas, input, button");
+
+    if (!blocked) {
+      row.style.setProperty("display", "none", "important");
+      rows.push(row);
+    }
+  }
+
+  // Hide wrappers whose children are all hidden now
+  for (let row of rows) {
+    while (
+      row.parentElement &&
+      !keep.includes(row.parentElement) &&
+      !keep.some(k => row.parentElement.contains(k)) &&
+      [...row.parentElement.children].every(c => c.style.display === "none")
+    ) {
+      row.parentElement.style.setProperty("display", "none", "important");
+      row = row.parentElement;
+    }
+  }
+
+  // The mission panel only keeps the chat
+  if (missionPanel) {
+    for (const child of [...missionPanel.children]) {
+      if (child !== chatPanel && child !== chatToggle) {
+        child.style.setProperty("display", "none", "important");
+      }
+    }
+  }
+}
+
+setTimeout(hideLegacyHud, 0);
+setTimeout(hideLegacyHud, 1500);
+
 function updateHUD(dt) {
-  if (hud.speed) {
-    hud.speed.textContent = Math.round(Math.abs(carSpeed) * 3.6);
-  }
-
-  if (hud.cash) hud.cash.textContent = "$" + cash;
-
-  if (hud.mode) {
-    hud.mode.textContent = driving
-      ? (nitroActive ? "NITRO" : "DRIVING")
-      : jumping ? "JUMPING" : sprinting ? "SPRINTING" : "ON FOOT";
-  }
-
-  if (hud.mission) {
-    hud.mission.textContent =
-      missionNames[checkpointIndex] || "ROUTE COMPLETE";
-  }
-
-  if (hud.progress) {
-    hud.progress.textContent =
-      `${checkpointIndex + 1} / ${checkpoints.length}`;
-  }
+  updateMoneyBadge();
 
   if (messageTimer > 0) {
     messageTimer -= dt;
@@ -4518,6 +4665,7 @@ const TOUCH_BUTTONS = [
   { id: "engine", label: "ENGINE", mode: "drive", size: 52, right: 188, bottom: 8, tap: () => toggleEngine() },
   { label: "EXIT",   mode: "drive", size: 52, right: 20,  bottom: 178, tap: () => toggleVehicle() },
   { label: "RESET",  mode: "drive", size: 48, right: 84,  bottom: 178, tap: () => recoverCar(false) },
+  { label: "SEAT",   mode: "drive", size: 48, right: 140, bottom: 178, tap: () => cycleSeat() },
   { label: "JUMP",   mode: "foot",  size: 88, right: 8,   bottom: 8,   tap: () => jump(), bg: "rgba(30,110,170,.8)" },
   { label: "SPRINT", mode: "foot",  size: 68, right: 108, bottom: 8,   hold: "boost",      bg: "rgba(30,140,70,.8)" },
   { label: "ENTER",  mode: "foot",  size: 60, right: 14,  bottom: 110, tap: () => toggleVehicle() },
@@ -4698,7 +4846,7 @@ function updateTouchUI() {
   if (!touchUIActive) return;
 
   const active = started && !paused;
-  const mode = active ? (driving ? "drive" : "foot") : "off";
+  const mode = active ? (driving || ridingIn ? "drive" : "foot") : "off";
   const portrait = innerHeight > innerWidth;
   const signature = mode + (engineRunning ? "1" : "0") + (portrait ? "p" : "l") + (started ? "s" : "x");
 
@@ -4760,6 +4908,13 @@ function positionMinimap() {
   }
 
   const size = Math.min(innerWidth, innerHeight) < 600 ? 108 : 180;
+
+  if (moneyBadge) {
+    moneyBadge.style.top = top + "px";
+    moneyBadge.style.width = size + "px";
+    moneyBadge.style.display = started ? "block" : "none";
+    top += (moneyBadge.offsetHeight || 20) + 4;
+  }
   const set = (name, value) => minimap.style.setProperty(name, value, "important");
 
   set("position", "fixed");
@@ -5734,7 +5889,7 @@ function applyAimPose(c) {
   const d = c.userData;
   if (!d.arms) return;
 
-  if (d.armed && !d.airborne) {
+  if (d.armed && !d.airborne && !d.seated) {
     d.arms[1].rotation.x = -1.45;
     d.arms[1].rotation.z = -.2;
     d.elbows[1].rotation.x = -.05;
@@ -5835,6 +5990,8 @@ function updateEffects(dt) {
 
 /* ---------- sound ---------- */
 
+let sfxVolume = 1;
+
 // One short burst of filtered noise
 function noiseBurst(audio, when, o) {
   const ctx = audio.context;
@@ -5848,7 +6005,7 @@ function noiseBurst(audio, when, o) {
   filter.Q.value = o.q || .8;
 
   const gain = ctx.createGain();
-  gain.gain.setValueAtTime(o.gain, when);
+  gain.gain.setValueAtTime(o.gain * sfxVolume, when);
   gain.gain.exponentialRampToValueAtTime(.001, when + o.duration);
 
   source.connect(filter);
@@ -5866,7 +6023,7 @@ function toneBurst(audio, when, from, to, duration, volume, type = "sine") {
   osc.type = type;
   osc.frequency.setValueAtTime(from, when);
   osc.frequency.exponentialRampToValueAtTime(Math.max(20, to), when + duration);
-  gain.gain.setValueAtTime(volume, when);
+  gain.gain.setValueAtTime(volume * sfxVolume, when);
   gain.gain.exponentialRampToValueAtTime(.001, when + duration);
   osc.connect(gain);
   gain.connect(audio.master);
@@ -6066,7 +6223,7 @@ function playerFire() {
     const dist = hit ? hit.dist : w.range;
 
     spawnTracer(ox, oy, oz, dx, dz, dist);
-    socket.emit("player:shoot", { x: ox, y: oy, z: oz, dx, dz, len: Math.min(dist, 90), weapon: currentWeapon });
+    if (i === 0) netShot(ox, oy, oz, a, Math.min(dist, 90), currentWeapon);
 
     if (!hit) continue;
 
@@ -6078,7 +6235,7 @@ function playerFire() {
       spawnImpact(hx, oy, hz, "person");
     } else if (hit.kind === "remote") {
       hitMarker = .18;
-      socket.emit("player:hit", { targetId: hit.ref.id, damage: Math.round(damage), weapon: w.id });
+      netHit(hit.ref.id, damage, currentWeapon);
       spawnImpact(hx, oy, hz, "person");
     } else {
       spawnImpact(hx, oy, hz, hit.kind === "car" ? "spark" : "dust");
@@ -6095,7 +6252,7 @@ function playerFire() {
 }
 
 function startReload() {
-  if (currentWeapon < 0 || reloading || playerDead || driving) return;
+  if (currentWeapon < 0 || reloading || playerDead || driving || ridingIn) return;
 
   const w = WEAPONS[currentWeapon];
   const stock = ammo[currentWeapon];
@@ -6119,12 +6276,13 @@ function finishReload() {
 }
 
 function selectWeapon(index) {
-  if (!started || paused || driving || playerDead || chatOpen || garageOpen) return;
+  if (!started || paused || driving || ridingIn || playerDead || chatOpen || garageOpen) return;
 
   currentWeapon = index === currentWeapon ? -1 : index;
   reloading = false;
   setCharacterGun(player, currentWeapon);
   showMessage(currentWeapon < 0 ? "GUN HOLSTERED" : WEAPONS[currentWeapon].name + " READY");
+  announceWeapon();
 }
 
 function cycleWeapon(direction) {
@@ -6283,6 +6441,8 @@ function updatePickups(dt) {
 const combatStyle = document.createElement("style");
 combatStyle.textContent = `
 #vice-combat{position:fixed;left:50%;bottom:calc(58px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);width:min(300px,56vw);z-index:9000;display:none;pointer-events:none;font-family:Arial,sans-serif;color:#fff;text-shadow:0 1px 3px #000}
+#vice-speed{display:none;text-align:center;font:italic 900 22px Arial,sans-serif;letter-spacing:1px;margin-bottom:4px}
+#vice-speed small{font-size:11px;font-style:normal;opacity:.85;margin-left:5px;letter-spacing:.5px}
 #vice-hp-label{display:flex;justify-content:space-between;font-size:11px;font-weight:bold;letter-spacing:1px;margin-bottom:3px}
 #vice-hp-track{height:12px;border-radius:6px;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.35);overflow:hidden}
 #vice-hp-fill{height:100%;width:100%;background:#4cd37b}
@@ -6311,12 +6471,14 @@ document.head.appendChild(combatStyle);
 const combatPanel = document.createElement("div");
 combatPanel.id = "vice-combat";
 combatPanel.innerHTML =
+  '<div id="vice-speed"></div>' +
   '<div id="vice-hp-label"><span>HEALTH</span><span id="vice-hp-text">100</span></div>' +
   '<div id="vice-hp-track"><div id="vice-hp-fill"></div></div>' +
   '<div id="vice-weapon"><span id="vice-weapon-name"></span><span id="vice-weapon-ammo"></span></div>' +
   '<div id="vice-weapon-row"></div>';
 document.body.appendChild(combatPanel);
 
+const speedEl = document.getElementById("vice-speed");
 const hpText = document.getElementById("vice-hp-text");
 const hpFill = document.getElementById("vice-hp-fill");
 const weaponName = document.getElementById("vice-weapon-name");
@@ -6367,6 +6529,7 @@ wastedPanel.append(wastedText, wastedSub);
 document.body.appendChild(wastedPanel);
 
 let lastHpShown = -1;
+let lastSpeedLabel = "";
 let lastWeaponLabel = "";
 let lastCrossState = "";
 
@@ -6379,7 +6542,7 @@ function updateCombatHud(dt) {
 
   if (show && !viewHintShown && !touchUIActive) {
     viewHintShown = true;
-    showMessage("WHEEL = ZOOM  •  P = FIRST PERSON  •  L = LOCK MOUSE");
+    showMessage("DRAG = ROTATE VIEW  •  WHEEL = ZOOM  •  P = FIRST PERSON  •  K = SEAT");
   }
 
   damageFlash = Math.max(0, damageFlash - dt * 1.4);
@@ -6389,6 +6552,26 @@ function updateCombatHud(dt) {
     crosshair.style.display = "none";
     damageOverlay.style.opacity = "0";
     return;
+  }
+
+  // Speed (and seat number) above the health bar while in a vehicle
+  const speedHost = ridingIn ? remotePlayers.get(ridingIn.driverId) : null;
+  const inCar = driving || !!speedHost;
+  const speedKmh = inCar
+    ? Math.round(Math.abs(speedHost ? speedHost.speed : carSpeed) * 3.6) : -1;
+  const seatNumber = ridingIn ? ridingIn.seat : mySeat;
+  const seatCount = speedHost
+    ? ((speedHost.vehicle.userData.seats || []).length || 1)
+    : ((car.userData.seats || []).length || 1);
+  const speedLabel = speedKmh + "|" + seatNumber + "|" + seatCount;
+
+  if (speedLabel !== lastSpeedLabel) {
+    lastSpeedLabel = speedLabel;
+    speedEl.style.display = speedKmh >= 0 ? "block" : "none";
+    if (speedKmh >= 0) {
+      speedEl.innerHTML = speedKmh + "<small>KM/H</small>" +
+        (seatCount > 1 ? "<small>SEAT " + (seatNumber + 1) + "/" + seatCount + "</small>" : "");
+    }
   }
 
   const shownHp = Math.ceil(hp);
@@ -6439,6 +6622,15 @@ function updateCombat(dt) {
   vehicleHitCooldown = Math.max(0, vehicleHitCooldown - dt);
   fireCooldown = Math.max(0, fireCooldown - dt);
 
+  // Keep other players up to date (also helps people who join later)
+  weaponAnnounceTimer -= dt;
+  if (weaponAnnounceTimer <= 0) {
+    weaponAnnounceTimer = 5;
+    if (currentWeapon >= 0) announceWeapon();
+    announceSeat();
+  }
+  flushNetHits(dt);
+
   // Body falls over when dead, stands up again afterwards
   const lying = playerDead && !driving ? -1.5 : 0;
   player.rotation.x += (lying - player.rotation.x) * Math.min(1, dt * 8);
@@ -6461,7 +6653,7 @@ function updateCombat(dt) {
   const locked = chatOpen || garageOpen;
   const held = !locked && (controls.fire || !!keys["f"]);
 
-  if (currentWeapon >= 0 && !driving) {
+  if (currentWeapon >= 0 && !driving && !ridingIn) {
     const w = WEAPONS[currentWeapon];
     const wants = w.auto ? held : (held && !firePrev);
 
@@ -6528,28 +6720,186 @@ renderer.domElement.addEventListener("wheel", event => {
   else zoomBy(delta > 0 ? 1.12 : .89);
 }, { passive: false });
 
-// Messages from other players (needs the small server relay shown in the notes)
-socket.on("player:shot", data => {
-  if (!data || ![data.x, data.y, data.z, data.dx, data.dz, data.len].every(Number.isFinite)) return;
-  spawnTracer(data.x, data.y, data.z, data.dx, data.dz, data.len);
-});
+/* =========================================================
+   NETWORK EVENTS — SHOTS, HITS, GUNS AND SEATS
+   Sent both as dedicated events and as hidden chat messages, so they reach
+   other players even when the server only relays chat.
+   ========================================================= */
+
+const NET_PREFIX = "~vc~";
+let relayConfirmed = false;           // true once a dedicated relay event has arrived
+const seenNet = [];
+let netLastShot = 0;
+const pendingHits = new Map();
+let hitFlushTimer = 0;
+let weaponAnnounceTimer = 5;
+
+function netNumbers(key, value) {
+  return typeof value === "number" ? Math.round(value * 100) / 100 : value;
+}
+
+function netSend(type, payload, dedicatedEvent) {
+  if (!socket.connected || !myPlayerId) return;
+
+  const uid = Math.random().toString(36).slice(2, 8);
+
+  if (dedicatedEvent) socket.emit(dedicatedEvent, { ...payload, uid });
+
+  if (!relayConfirmed) {
+    const body = JSON.stringify({ u: uid, f: myPlayerId, t: type, ...payload }, netNumbers);
+    socket.emit("chat:message", NET_PREFIX + body);
+  }
+
+  return uid;
+}
+
+function netShot(x, y, z, angle, length, weapon) {
+  const now = performance.now();
+  if (now - netLastShot < 140) return;
+  netLastShot = now;
+  netSend("s", { x, y, z, a: angle, l: length, w: weapon }, "player:shoot");
+}
+
+function netHit(targetId, damage, weapon) {
+  const entry = pendingHits.get(targetId) || { damage: 0, weapon };
+  entry.damage += damage;
+  pendingHits.set(targetId, entry);
+  if (hitFlushTimer <= 0) hitFlushTimer = .12;
+}
+
+function flushNetHits(dt) {
+  if (hitFlushTimer <= 0) return;
+  hitFlushTimer -= dt;
+  if (hitFlushTimer > 0) return;
+
+  for (const [targetId, entry] of pendingHits) {
+    const damage = Math.round(entry.damage);
+    if (damage <= 0) continue;
+
+    const uid = netSend("h", { to: targetId, d: damage, w: entry.weapon });
+    socket.emit("player:hit", { targetId, damage, weapon: WEAPONS[entry.weapon]?.id, uid });
+  }
+  pendingHits.clear();
+}
+
+function announceWeapon() {
+  netSend("w", { w: currentWeapon }, "player:weapon");
+}
+
+function announceSeat() {
+  if (ridingIn) netSend("t", { d: ridingIn.driverId, s: ridingIn.seat }, "player:seat");
+  else if (driving && mySeat !== 0) netSend("t", { d: myPlayerId, s: mySeat }, "player:seat");
+}
+
+function announceState() {
+  announceWeapon();
+  announceSeat();
+}
 
 function remoteNameById(id) {
   const remote = remotePlayers.get(id);
   return remote ? String(remote.name || "PLAYER").toUpperCase() : "ANOTHER PLAYER";
 }
 
-socket.on("player:damaged", data => {
-  if (data && Number.isFinite(data.damage)) {
-    damagePlayer(clamp(data.damage, 0, 60), remoteNameById(data.by));
+// A tracer, muzzle flash and (distance-scaled) gunshot from another player
+function showRemoteShot(x, y, z, angle, length, weapon) {
+  const dx = Math.sin(angle), dz = Math.cos(angle);
+  spawnTracer(x, y, z, dx, dz, length);
+  spawnImpact(x, y, z, "spark");
+
+  const dist = Math.hypot(camera.position.x - x, camera.position.z - z);
+  const volume = Math.pow(clamp(1 - dist / 150, 0, 1), 1.5);
+
+  if (volume > .04 && WEAPONS[weapon]) {
+    sfxVolume = volume;
+    playGunSound(weapon);
+    sfxVolume = 1;
   }
+}
+
+function handleNet(type, msg) {
+  const from = msg.f;
+
+  if (type === "s") {
+    if (![msg.x, msg.y, msg.z, msg.a, msg.l].every(Number.isFinite)) return;
+    showRemoteShot(msg.x, msg.y, msg.z, msg.a, clamp(msg.l, .5, 150), msg.w);
+  } else if (type === "h") {
+    if (msg.to === myPlayerId && Number.isFinite(msg.d)) {
+      damagePlayer(clamp(msg.d, 0, 80), remoteNameById(from));
+    }
+  } else if (type === "w") {
+    const remote = remotePlayers.get(from);
+    if (remote && Number.isFinite(msg.w)) remote.weapon = msg.w;
+  } else if (type === "t") {
+    if (!msg.d) {
+      seated.delete(from);
+    } else {
+      seated.set(from, { driverId: msg.d, seat: Number(msg.s) || 0 });
+      if (msg.d === myPlayerId && from !== myPlayerId) {
+        showMessage(remoteNameById(from) + " GOT IN YOUR VEHICLE");
+      }
+    }
+  }
+}
+
+function handleChatNet(data) {
+  let msg;
+  try {
+    msg = JSON.parse(String(data.message).slice(NET_PREFIX.length));
+  } catch (error) {
+    return;
+  }
+
+  if (!msg || msg.f === myPlayerId || relayConfirmed) return;
+
+  if (msg.u) {
+    if (seenNet.includes(msg.u)) return;
+    seenNet.push(msg.u);
+    if (seenNet.length > 80) seenNet.shift();
+  }
+
+  handleNet(msg.t, msg);
+}
+
+// Dedicated events (when the server relays them)
+function handleDedicated(type, data) {
+  if (!data || data.id === myPlayerId) return;
+  relayConfirmed = true;
+
+  if (data.uid) {
+    if (seenNet.includes(data.uid)) return;
+    seenNet.push(data.uid);
+    if (seenNet.length > 80) seenNet.shift();
+  }
+
+  handleNet(type, data);
+}
+
+socket.on("player:shot", data => {
+  if (!data) return;
+  const angle = Number.isFinite(data.a) ? data.a : Math.atan2(data.dx, data.dz);
+  handleDedicated("s", { ...data, a: angle, l: data.len ?? data.l, w: data.weapon ?? data.w, f: data.id });
+});
+
+socket.on("player:damaged", data => {
+  if (!data || !Number.isFinite(data.damage)) return;
+  relayConfirmed = true;
+  damagePlayer(clamp(data.damage, 0, 80), remoteNameById(data.by));
 });
 
 socket.on("player:hit", data => {
   // Fallback if the server simply relays hits to everyone
-  if (data && data.targetId && data.targetId === myPlayerId && Number.isFinite(data.damage)) {
-    damagePlayer(clamp(data.damage, 0, 60), remoteNameById(data.by));
-  }
+  if (!data || data.targetId !== myPlayerId || !Number.isFinite(data.damage)) return;
+  relayConfirmed = true;
+  damagePlayer(clamp(data.damage, 0, 80), remoteNameById(data.by || data.id));
+});
+
+socket.on("player:weapon", data => {
+  if (data) handleDedicated("w", { ...data, f: data.id || data.f, w: data.weapon ?? data.w });
+});
+
+socket.on("player:seat", data => {
+  if (data) handleDedicated("t", { ...data, f: data.id || data.f, d: data.driver ?? data.d, s: data.seat ?? data.s });
 });
 
 createPickups();
@@ -6677,6 +7027,228 @@ renderer.domElement.addEventListener("pointerup", endLookPointer);
 renderer.domElement.addEventListener("pointercancel", endLookPointer);
 
 let viewHintShown = false;
+
+/* Desktop: drag with the right mouse button (or the left one when no gun is
+   drawn) to rotate the view freely, no mouse lock needed. */
+let mouseDrag = null;
+
+function isLookDragging() {
+  return lookPointers.size > 0 || mouseDrag !== null;
+}
+
+renderer.domElement.addEventListener("contextmenu", event => event.preventDefault());
+
+renderer.domElement.addEventListener("pointerdown", event => {
+  if (event.pointerType !== "mouse" || pointerLocked) return;
+
+  const rotate = event.button === 2 || event.button === 1 ||
+    (event.button === 0 && (currentWeapon < 0 || driving || ridingIn));
+
+  if (rotate) {
+    mouseDrag = { id: event.pointerId, x: event.clientX, y: event.clientY };
+    if (renderer.domElement.setPointerCapture) renderer.domElement.setPointerCapture(event.pointerId);
+  }
+});
+
+renderer.domElement.addEventListener("pointermove", event => {
+  if (!mouseDrag || event.pointerId !== mouseDrag.id) return;
+  if (!started || paused || chatOpen || garageOpen || playerDead) return;
+
+  applyLook(event.clientX - mouseDrag.x, event.clientY - mouseDrag.y);
+  mouseDrag.x = event.clientX;
+  mouseDrag.y = event.clientY;
+});
+
+const endMouseDrag = event => {
+  if (mouseDrag && event.pointerId === mouseDrag.id) mouseDrag = null;
+};
+renderer.domElement.addEventListener("pointerup", endMouseDrag);
+renderer.domElement.addEventListener("pointercancel", endMouseDrag);
+
+/* =========================================================
+   SEATS — SEVERAL PEOPLE IN ONE VEHICLE
+   ========================================================= */
+
+let mySeat = 0;                 // seat number in my own car (0 = driver)
+let ridingIn = null;            // { driverId, seat } while I am a passenger in someone else's car
+const seated = new Map();       // playerId -> { driverId, seat } for the other players
+
+// Who is sitting where in my car (other players)
+function occupiedSeatsOf(driverId) {
+  const taken = new Set();
+  const host = remotePlayers.get(driverId);
+
+  const hostEntry = seated.get(driverId);
+  taken.add(hostEntry && hostEntry.driverId === driverId ? hostEntry.seat : 0);
+  if (driverId === myPlayerId) taken.add(mySeat);
+  if (host && host.driving === false && driverId !== myPlayerId) taken.add(0);
+
+  for (const entry of seated.values()) {
+    if (entry.driverId === driverId) taken.add(entry.seat);
+  }
+
+  if (ridingIn && ridingIn.driverId === driverId) taken.add(ridingIn.seat);
+  return taken;
+}
+
+function cycleSeat() {
+  if (!driving || !started || paused) return;
+
+  const seats = car.userData.seats || [];
+  if (seats.length < 2) {
+    showMessage("THIS VEHICLE HAS ONE SEAT");
+    return;
+  }
+
+  const taken = occupiedSeatsOf(myPlayerId);
+  taken.delete(mySeat);
+
+  for (let i = 1; i <= seats.length; i++) {
+    const candidate = (mySeat + i) % seats.length;
+    if (!taken.has(candidate)) {
+      mySeat = candidate;
+      break;
+    }
+  }
+
+  showMessage(mySeat === 0 ? "DRIVER SEAT" : "PASSENGER SEAT " + (mySeat + 1) + "/" + seats.length + " — PRESS K TO RETURN");
+  announceSeat();
+  if (mySeat === 0) netSend("t", { d: 0, s: 0 }, "player:seat");
+}
+
+function findBoardableRemote() {
+  let best = null;
+
+  for (const remote of remotePlayers.values()) {
+    if (!remote.driving) continue;
+    const dist = Math.hypot(
+      remote.root.position.x - player.position.x,
+      remote.root.position.z - player.position.z
+    );
+    if (dist < 9 && (!best || dist < best.dist)) best = { remote, dist };
+  }
+
+  return best;
+}
+
+function boardRemoteVehicle(remote) {
+  const seats = remote.vehicle.userData.seats || [];
+  const taken = occupiedSeatsOf(remote.id);
+
+  let seat = -1;
+  for (let i = 0; i < seats.length; i++) {
+    if (!taken.has(i)) { seat = i; break; }
+  }
+
+  if (seat < 0) {
+    showMessage("THIS VEHICLE IS FULL");
+    return;
+  }
+
+  ridingIn = { driverId: remote.id, seat };
+  jumping = false;
+  jumpOffset = 0;
+  sprinting = false;
+  playerSpeedNow = 0;
+  strafeNow = 0;
+  player.visible = false;
+  announceSeat();
+  showMessage("RIDING WITH " + remoteNameById(remote.id) + " — SEAT " + (seat + 1) + "  (E TO GET OUT)");
+}
+
+function leaveSeat(auto = false) {
+  if (!ridingIn) return;
+
+  const host = remotePlayers.get(ridingIn.driverId);
+  ridingIn = null;
+  netSend("t", { d: 0, s: 0 }, "player:seat");
+
+  let x = player.position.x, z = player.position.z;
+
+  if (host) {
+    const yaw = host.root.rotation.y;
+    const spot = findFreeSpot(
+      host.root.position.x + Math.cos(yaw) * 3.8,
+      host.root.position.z - Math.sin(yaw) * 3.8,
+      PLAYER_RADIUS
+    );
+    if (spot) { x = spot[0]; z = spot[1]; }
+  }
+
+  playerGround = groundHeightAt(x, z);
+  jumpOffset = 0;
+  player.position.set(x, playerGround, z);
+  player.visible = true;
+  showMessage(auto ? "THE DRIVER LEFT THE VEHICLE" : "YOU GOT OUT");
+}
+
+// Drop seat records whose vehicle is no longer being driven
+function validateSeats() {
+  for (const [id, entry] of [...seated]) {
+    if (entry.driverId === id) {
+      const remote = remotePlayers.get(id);
+      if (!remote || !remote.driving) seated.delete(id);
+      continue;
+    }
+
+    const host = entry.driverId === myPlayerId ? { driving } : remotePlayers.get(entry.driverId);
+    if (!remotePlayers.has(id) || !host || !host.driving) seated.delete(id);
+  }
+
+  if (ridingIn) {
+    const host = remotePlayers.get(ridingIn.driverId);
+    if (!host || !host.driving) leaveSeat(true);
+  }
+}
+
+// Where (and in which vehicle) this remote player is sitting, if anywhere
+function seatTarget(remote) {
+  const entry = seated.get(remote.id);
+
+  if (remote.driving) {
+    const index = entry && entry.driverId === remote.id ? entry.seat : 0;
+    const seats = remote.vehicle.userData.seats;
+    return seats && seats[index] ? { parent: remote.vehicle, seat: seats[index], index } : null;
+  }
+
+  if (!entry || entry.driverId === remote.id) return null;
+
+  const hostIsMe = entry.driverId === myPlayerId;
+  const host = hostIsMe ? { driving, vehicle: car } : remotePlayers.get(entry.driverId);
+  if (!host || !host.driving) return null;
+
+  const seats = host.vehicle.userData.seats;
+  return seats && seats[entry.seat]
+    ? { parent: host.vehicle, seat: seats[entry.seat], index: entry.seat }
+    : null;
+}
+
+// Puts the avatar into its seat (inside the vehicle model) or back on foot
+function layoutRemoteSeat(remote) {
+  const target = seatTarget(remote);
+  const d = remote.avatar.userData;
+
+  if (!target) {
+    if (d.seated) {
+      d.seated = false;
+      if (remote.avatar.parent !== remote.root) remote.root.add(remote.avatar);
+      remote.avatar.position.set(0, 0, 0);
+      remote.avatar.rotation.set(0, 0, 0);
+      if (d.gun) d.gun.visible = true;
+    }
+    return;
+  }
+
+  if (remote.avatar.parent !== target.parent) target.parent.add(remote.avatar);
+
+  remote.avatar.position.set(target.seat[0], target.seat[1] - 1.33, target.seat[2]);
+  remote.avatar.rotation.set(0, 0, 0);
+  remote.avatar.visible = true;
+  d.seated = true;
+  d.seatIndex = target.index;
+  if (d.gun) d.gun.visible = false;
+  animateCharacter(remote.avatar, .016, false, 0);
+}
 
 /* =========================================================
    PERFORMANCE — AUTOMATIC GRAPHICS QUALITY (LOW-END PCs)

@@ -1,7 +1,7 @@
 import * as THREE from "https://esm.sh/three@0.160.0";
 
 /* =========================================================
-   VICE CITY — UPDATE 31
+   VICE CITY — UPDATE 32
    Complete game.js
    Original Update 23 visuals preserved.
    Multiplayer connection and reconnection improvements.
@@ -143,8 +143,24 @@ canvas{touch-action:none;display:block}
 // Start on a road intersection (the map centre is the middle of a block)
 const SPAWN = { carX: 100, carZ: 96, playerX: 100, playerZ: 106 };
 
-// Heights of each surface type (0 road, 1 curb, 2 lot grass, 3 park grass)
-const GROUND_HEIGHT = [0, .235, -.28, .29];
+// The owner's private estate (a whole city block) and who owns it
+const VILLA = { x: 400, z: 0, half: 82 };
+const VILLA_NAME = "NAYAK VILLA";
+const OWNER_NAMES = ["nayak", "subham", "subham nayak"];    // player names (lower case) that own the villa
+const OWNER_PASSCODE = "";        // optional: if set, the owner must also type  /owner <passcode>  in chat
+
+const VILLA_POOL = { x0: VILLA.x - 12, x1: VILLA.x + 12, z0: VILLA.z - 28, z1: VILLA.z - 16 };
+const VILLA_SPA = { x: VILLA.x + 28, z: VILLA.z - 22, r: 3.4 };
+const VILLA_GYM = { x0: VILLA.x + 35, x1: VILLA.x + 57, z0: VILLA.z - 43, z1: VILLA.z - 29 };
+const VILLA_HOUSE = { x0: VILLA.x - 32, x1: VILLA.x + 32, z0: VILLA.z - 2, z1: VILLA.z + 30 };
+
+function inVillaWater(x, z) {
+  return (x > VILLA_POOL.x0 && x < VILLA_POOL.x1 && z > VILLA_POOL.z0 && z < VILLA_POOL.z1) ||
+    Math.hypot(x - VILLA_SPA.x, z - VILLA_SPA.z) < VILLA_SPA.r;
+}
+
+// Heights of each surface type (0 road, 1 curb, 2 lot grass, 3 park grass, 4 villa estate)
+const GROUND_HEIGHT = [0, .235, -.28, .29, 0];
 
 const boxGeo = new THREE.BoxGeometry(1, 1, 1);
 const sphereGeo = new THREE.SphereGeometry(1, 10, 8);
@@ -1121,6 +1137,11 @@ function createCity() {
 
   for (let gx = -L + 100; gx < L; gx += S) {
     for (let gz = -L + 100; gz < L; gz += S) {
+      if (gx === VILLA.x && gz === VILLA.z) {
+        createVilla();
+        continue;
+      }
+
       const n = Math.abs(
         Math.floor(gx / S) * 7 + Math.floor(gz / S) * 11
       );
@@ -2421,6 +2442,7 @@ function openGarage() {
 function closeGarage() {
   garageOpen = false;
   garagePanel.classList.add("hidden");
+  if (typeof missionMenu !== "undefined") missionMenu.classList.add("hidden");
 }
 
 function toggleGarage() {
@@ -2921,6 +2943,18 @@ function closeChat() {
 function sendChatMessage() {
   const message = chatInput.value.trim();
 
+  // /owner <passcode> unlocks the villa when a passcode is configured
+  if (message.toLowerCase().startsWith("/owner ")) {
+    chatInput.value = "";
+    if (OWNER_PASSCODE && message.slice(7).trim() === OWNER_PASSCODE) {
+      ownerUnlocked = true;
+      showMessage("OWNER ACCESS UNLOCKED");
+    } else {
+      showMessage("WRONG OWNER CODE");
+    }
+    return;
+  }
+
   if (!message || !socket.connected || !myPlayerId) return;
 
   socket.emit("chat:message", message);
@@ -3054,6 +3088,8 @@ function nearestRoadLine(value) {
 
 // 0 = road, 1 = curb / sidewalk, 2 = lot grass, 3 = park grass
 function groundType(x, z) {
+  if (Math.abs(x - VILLA.x) < VILLA.half && Math.abs(z - VILLA.z) < VILLA.half) return 4;
+
   for (const p of parks) {
     if (Math.abs(x - p.x) < 62.5 && Math.abs(z - p.z) < 62.5) return 3;
   }
@@ -3069,7 +3105,10 @@ function groundType(x, z) {
 }
 
 function groundHeightAt(x, z) {
-  return GROUND_HEIGHT[groundType(x, z)];
+  const type = groundType(x, z);
+  // wading in the pool or spa
+  if (type === 4 && inVillaWater(x, z)) return -.45;
+  return GROUND_HEIGHT[type];
 }
 
 function randomRoadLine() {
@@ -3162,13 +3201,14 @@ function positionBlocked(x, z, radius, options = {}) {
   if (options.traffic && circleHitsTraffic(x, z, radius)) return true;
   if (options.pedestrians && circleHitsPedestrians(x, z, radius)) return true;
   if (options.car && circleHitsCar(x, z, radius)) return true;
+  if (options.vehicle && inVillaWater(x, z)) return true;   // cars stay out of the pool
 
   return false;
 }
 
 // Finds the nearest position that is not blocked (spiral search)
 function findFreeSpot(x, z, radius) {
-  const options = { traffic: true, pedestrians: true };
+  const options = { traffic: true, pedestrians: true, vehicle: radius > 1.5 };
 
   for (const r of [0, 3, 6, 9, 13, 18, 24, 32, 42]) {
     const steps = r === 0 ? 1 : 12;
@@ -3643,75 +3683,864 @@ function updatePedestrians(dt) {
 }
 
 /* =========================================================
-   MISSIONS — 20 CHECKPOINTS
+   MISSIONS — PICK A JOB (M), FOLLOW THE BEAM, GET PAID
    ========================================================= */
 
-const checkpoints = [];
-let checkpointIndex = 0;
 let cash = 0;
+const MISSION_SAVE_KEY = "viceMissionsV2";
+const missionSave = { done: {}, cash: 0 };
 
-const missionNames = [
-  "FIRST STEPS", "DOWNTOWN RUN", "PARKSIDE ROUTE",
-  "SUNSET BOULEVARD", "NORTH DISTRICT", "THE LONG DRIVE",
-  "COASTAL LOOP", "CITY CENTRE", "EASTSIDE CHECKPOINT",
-  "WEST END RUN", "THE GRAND LOOP", "HARBOR ROAD",
-  "UPTOWN VISIT", "CROSS-CITY TRIP", "PALM AVENUE",
-  "FINAL STRETCH", "SOUTH DISTRICT", "SKYLINE ROUTE",
-  "LAST CHALLENGE", "VICE CITY LEGEND"
+try {
+  const raw = localStorage.getItem(MISSION_SAVE_KEY);
+  if (raw) {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      missionSave.done = parsed.done || {};
+      cash = Number(parsed.cash) || 0;
+    }
+  }
+} catch (error) { /* storage not available */ }
+
+function saveMissions() {
+  missionSave.cash = cash;
+  try { localStorage.setItem(MISSION_SAVE_KEY, JSON.stringify(missionSave)); } catch (error) { /* ignore */ }
+}
+
+const P = (x, z, label, r) => ({ x, z, label, r });
+
+function inVehicleNow() { return driving || !!ridingIn; }
+
+function needsSatisfied(needs) {
+  if (needs === "car") return inVehicleNow();
+  if (needs === "foot") return !inVehicleNow();
+  return true;
+}
+
+function subjectPosition() {
+  const host = ridingIn ? remotePlayers.get(ridingIn.driverId) : null;
+  if (host) return host.root.position;
+  return driving ? car.position : player.position;
+}
+
+function isOwner() {
+  const name = String(myPlayerName || "").trim().toLowerCase();
+  if (!OWNER_NAMES.includes(name)) return false;
+  return !OWNER_PASSCODE || ownerUnlocked;
+}
+
+let ownerUnlocked = false;
+
+const MISSION_CATEGORIES = ["ON FOOT", "DRIVING", "STUNTS", "COMBAT", "EXPLORE", "OWNER"];
+
+const MISSION_DEFS = [
+  {
+    id: "first_steps", title: "FIRST STEPS", category: "ON FOOT", kind: "route",
+    needs: "foot", radius: 6, reward: 100, time: 0,
+    brief: "Walk to three markers near the start. Hold SHIFT to sprint.",
+    points: () => [P(100, 170, "WALK TO THE FIRST MARKER"), P(170, 100, "NOW THE NEXT ONE"), P(100, 30, "BACK TO THE START")]
+  },
+  {
+    id: "morning_run", title: "MORNING RUN", category: "ON FOOT", kind: "route",
+    needs: "foot", radius: 7, reward: 300, time: 160,
+    brief: "Jog one lap around the block before time runs out.",
+    points: () => [P(300, 100, "RUN TO THE EAST CORNER"), P(300, -100, "TURN NORTH"), P(100, -100, "HEAD WEST"), P(100, 100, "FINISH AT THE START")]
+  },
+  {
+    id: "package_hunt", title: "PACKAGE HUNT", category: "ON FOOT", kind: "collect",
+    needs: "any", count: 8, reward: 450, time: 300,
+    brief: "Eight packages are hidden along the streets. Find them all."
+  },
+  {
+    id: "delivery", title: "DOWNTOWN DELIVERY", category: "DRIVING", kind: "route",
+    needs: "car", radius: 10, reward: 600, time: 140,
+    brief: "Pick up a package and deliver it across town. Take a car!",
+    points: () => [P(-100, -100, "PICK UP THE PACKAGE"), P(300, 300, "DELIVER IT TO THE CLIENT")]
+  },
+  {
+    id: "checkpoint_sprint", title: "CHECKPOINT SPRINT", category: "DRIVING", kind: "route",
+    needs: "car", radius: 11, reward: 700, time: 110,
+    brief: "Six checkpoints against the clock.",
+    points: () => [P(300, 100, "CHECKPOINT"), P(300, -300, "CHECKPOINT"), P(-100, -300, "CHECKPOINT"), P(-300, -100, "CHECKPOINT"), P(-300, 300, "CHECKPOINT"), P(100, 300, "FINISH LINE")]
+  },
+  {
+    id: "city_loop", title: "GRAND CITY LOOP", category: "DRIVING", kind: "route",
+    needs: "car", radius: 12, reward: 1500, time: 300,
+    brief: "A big loop around the whole city. Big money, big distance.",
+    points: () => [P(500, 100, "EAST SIDE"), P(700, -100, "EAST SIDE"), P(500, -500, "NORTH-EAST"), P(100, -700, "NORTH"), P(-300, -700, "NORTH-WEST"), P(-700, -300, "WEST"), P(-700, 300, "WEST"), P(-300, 700, "SOUTH-WEST"), P(100, 700, "SOUTH"), P(500, 500, "SOUTH-EAST"), P(300, 100, "HEADING HOME"), P(100, 100, "FINISH")]
+  },
+  {
+    id: "speed_demon", title: "SPEED DEMON", category: "STUNTS", kind: "speed",
+    needs: "car", reach: 200, keep: 150, hold: 8, reward: 450, time: 90,
+    brief: "Hit 200 km/h, then stay above 150 km/h for 8 seconds."
+  },
+  {
+    id: "drift_king", title: "DRIFT KING", category: "STUNTS", kind: "drift",
+    needs: "car", seconds: 20, reward: 500, time: 120,
+    brief: "Slide the car sideways (SPACE = handbrake) for 20 seconds in total."
+  },
+  {
+    id: "nitro_rush", title: "NITRO RUSH", category: "STUNTS", kind: "nitro",
+    needs: "car", seconds: 15, reward: 400, time: 90,
+    brief: "Burn 15 seconds of nitro (hold SHIFT while driving)."
+  },
+  {
+    id: "careful_driver", title: "CAREFUL DRIVER", category: "STUNTS", kind: "distance",
+    needs: "car", meters: 1800, reward: 800, time: 240,
+    brief: "Drive 1,800 m without a single crash. A crash resets the count."
+  },
+  {
+    id: "target_practice", title: "TARGET PRACTICE", category: "COMBAT", kind: "targets",
+    needs: "foot", gun: true, reward: 500, time: 75,
+    spawn: () => ({ count: 10, minR: 14, maxR: 30, moving: false }),
+    brief: "Pop ten targets around you. A pistol is drawn for you."
+  },
+  {
+    id: "sharpshooter", title: "SHARPSHOOTER", category: "COMBAT", kind: "targets",
+    needs: "foot", gun: true, reward: 900, time: 90,
+    spawn: () => ({ count: 14, minR: 22, maxR: 45, moving: true }),
+    brief: "Fourteen moving targets, further away. Try the SMG."
+  },
+  {
+    id: "city_explorer", title: "CITY EXPLORER", category: "EXPLORE", kind: "route",
+    needs: "any", radius: 10, reward: 600, time: 240,
+    brief: "Visit five landmarks around the city, on foot or by car.",
+    points: () => [P(100, -24, "BILLBOARD PLAZA"), P(-70, -100, "WEST BILLBOARD"), P(80, -100, "EAST BILLBOARD"), P(400, 100, "THE VILLA GATE"), P(-100, 300, "SKYLINE CORNER")]
+  },
+  {
+    id: "villa_tour", title: "VILLA TOUR", category: "OWNER", kind: "route",
+    needs: "any", radius: 4.5, reward: 800, time: 0, ownerOnly: true,
+    brief: "Visit every facility of your villa.",
+    points: () => villaTourPoints()
+  },
+  {
+    id: "owner_range", title: "OWNER'S RANGE", category: "OWNER", kind: "targets",
+    needs: "foot", gun: true, reward: 700, time: 60, ownerOnly: true,
+    spawn: () => ({ list: villaRangeTargets() }),
+    brief: "Clear the targets on your private shooting range."
+  }
 ];
 
-function createCheckpoints() {
-  const material = new THREE.MeshBasicMaterial({
-    color: 0xffd34d,
-    wireframe: true
+let activeMission = null;
+const missionBanner = { text: "", sub: "", timer: 0, good: true };
+
+/* ---------- targets (balloons) for shooting missions ---------- */
+
+const targetRedMat = new THREE.MeshLambertMaterial({ color: 0xe0392d });
+const targetWhiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+const targetRingGeo = new THREE.TorusGeometry(.95, .09, 6, 18);
+const targetPool = [];
+const missionTargets = [];
+
+for (let i = 0; i < 16; i++) {
+  const group = new THREE.Group();
+  const ball = new THREE.Mesh(sphereGeo, targetRedMat);
+  ball.scale.setScalar(.7);
+  const ring = new THREE.Mesh(targetRingGeo, targetWhiteMat);
+  ring.rotation.x = Math.PI / 2;
+  ring.scale.setScalar(.75);
+  const dot = new THREE.Mesh(sphereGeo, targetWhiteMat);
+  dot.scale.setScalar(.28);
+  dot.position.z = .62;
+  group.add(ball, ring, dot);
+  group.visible = false;
+  scene.add(group);
+  targetPool.push({ group, x: 0, z: 0, y: 1.6, x0: 0, z0: 0, ax: 0, az: 0, speed: 0, phase: rand(0, 6), alive: false });
+}
+
+function spawnMissionTargets(list) {
+  missionTargets.length = 0;
+
+  list.slice(0, targetPool.length).forEach((spec, i) => {
+    const t = targetPool[i];
+    t.x0 = t.x = spec.x;
+    t.z0 = t.z = spec.z;
+    t.y = spec.y;
+    t.ax = spec.ax || 0;
+    t.az = spec.az || 0;
+    t.speed = spec.speed || 0;
+    t.alive = true;
+    t.group.visible = true;
+    missionTargets.push(t);
   });
+}
 
-  for (let i = 0; i < 20; i++) {
-    const angle = i / 20 * Math.PI * 2;
-    const radius = 220 + (i % 4) * 125;
+function clearMissionTargets() {
+  for (const t of targetPool) {
+    t.alive = false;
+    t.group.visible = false;
+  }
+  missionTargets.length = 0;
+}
 
-    const marker = new THREE.Mesh(
-      new THREE.TorusGeometry(7, .8, 6, 18),
-      material
-    );
+function popMissionTarget(t) {
+  if (!t.alive) return;
+  t.alive = false;
+  t.group.visible = false;
+  hitMarker = .18;
+  spawnImpact(t.x, groundHeightAt(t.x, t.z) + t.y, t.z, "spark");
+}
 
-    let cx = Math.cos(angle) * radius;
-    let cz = Math.sin(angle) * radius;
-
-    // Snap onto the nearest road so every checkpoint can be reached
-    if (Math.abs(cx - nearestRoadLine(cx)) < Math.abs(cz - nearestRoadLine(cz))) {
-      cx = nearestRoadLine(cx);
-    } else {
-      cz = nearestRoadLine(cz);
-    }
-
-    marker.position.set(cx, 3, cz);
-
-    marker.rotation.x = Math.PI / 2;
-    scene.add(marker);
-    checkpoints.push(marker);
+function updateMissionTargets(dt) {
+  for (const t of missionTargets) {
+    if (!t.alive) continue;
+    t.phase += dt * t.speed;
+    t.x = t.x0 + Math.sin(t.phase) * t.ax;
+    t.z = t.z0 + Math.cos(t.phase * 1.3) * t.az;
+    const bob = Math.sin(performance.now() * .003 + t.x0) * .12;
+    t.group.position.set(t.x, groundHeightAt(t.x, t.z) + t.y + bob, t.z);
+    t.group.rotation.y += dt * 1.2;
   }
 }
 
-function updateCheckpoint() {
-  const target = checkpoints[checkpointIndex];
-  if (!target) return;
+function makeTargetSpawns(spec) {
+  if (spec.list) return spec.list.map(p => ({ x: p.x, z: p.z, y: p.y || 1.6, ax: 0, az: 0, speed: 0 }));
 
-  const position = driving ? car.position : player.position;
+  const pos = subjectPosition();
+  const list = [];
 
-  if (position.distanceTo(target.position) < 13) {
-    const completed = checkpointIndex + 1;
-    cash += 150;
+  for (let tries = 0; list.length < spec.count && tries < 300; tries++) {
+    const a = rand(0, Math.PI * 2), r = rand(spec.minR, spec.maxR);
+    const x = pos.x + Math.cos(a) * r, z = pos.z + Math.sin(a) * r;
+    if (circleHitsBuilding(x, z, 2)) continue;
+    if (list.some(t => Math.hypot(t.x - x, t.z - z) < 5)) continue;
 
-    if (completed === checkpoints.length) {
-      checkpointIndex = 0;
-      cash += 1000;
-      showMessage("MISSION ROUTE COMPLETE +$1,150");
-    } else {
-      checkpointIndex++;
-      showMessage("MISSION COMPLETE +$150");
+    list.push({
+      x, z, y: rand(1.3, 3),
+      ax: spec.moving ? rand(2, 5) : 0, az: spec.moving ? rand(2, 5) : 0,
+      speed: spec.moving ? rand(.8, 1.6) : 0
+    });
+  }
+
+  return list;
+}
+
+/* ---------- beams and rings in the world ---------- */
+
+const markerRingGeo = new THREE.RingGeometry(.86, 1, 36);
+const markerBeamGeo = new THREE.CylinderGeometry(1, 1, 1, 14, 1, true);
+
+function makeMarker(color) {
+  const group = new THREE.Group();
+  const material = new THREE.MeshBasicMaterial({
+    color, transparent: true, opacity: .4, blending: THREE.AdditiveBlending,
+    depthWrite: false, fog: false, side: THREE.DoubleSide
+  });
+
+  const ring = new THREE.Mesh(markerRingGeo, material);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = .25;
+
+  const beam = new THREE.Mesh(markerBeamGeo, material);
+  const core = new THREE.Mesh(boxGeo, new THREE.MeshBasicMaterial({ color, fog: false }));
+
+  group.add(ring, beam, core);
+  group.visible = false;
+  scene.add(group);
+  return { group, ring, beam, core };
+}
+
+const primaryMarker = makeMarker(0xffd34d);
+const packageMarkers = Array.from({ length: 12 }, () => makeMarker(0x33e0ff));
+
+function placeMarker(marker, item, beamHeight, time) {
+  const r = Math.max(1.5, item.r || 6);
+  marker.group.visible = true;
+  marker.group.position.set(item.x, groundHeightAt(item.x, item.z), item.z);
+  marker.ring.scale.setScalar(r);
+  const width = Math.max(.7, r * .3);
+  marker.beam.scale.set(width, beamHeight, width);
+  marker.beam.position.y = beamHeight / 2;
+  marker.core.position.y = 1.6 + Math.sin(time * 2) * .25;
+  marker.core.scale.setScalar(Math.min(1.2, .5 + r * .08));
+  marker.core.rotation.y = time * 1.5;
+  marker.core.rotation.x = time * .9;
+}
+
+/* ---------- mission logic ---------- */
+
+function missionRadius(m, p) {
+  return p.r || m.def.radius || 8;
+}
+
+function missionTargetList(m) {
+  const def = m.def;
+  const list = [];
+
+  if (def.kind === "route") {
+    const p = m.points[m.index];
+    if (p) list.push({ x: p.x, z: p.z, r: missionRadius(m, p), primary: true, style: "beam" });
+  } else if (def.kind === "collect") {
+    const pos = subjectPosition();
+    let best = -1, bestDist = Infinity;
+    m.items.forEach((item, i) => {
+      if (item.got) return;
+      const d = Math.hypot(item.x - pos.x, item.z - pos.z);
+      if (d < bestDist) { bestDist = d; best = i; }
+    });
+    m.items.forEach((item, i) => {
+      if (!item.got) list.push({ x: item.x, z: item.z, r: 3.5, primary: i === best, style: "beam" });
+    });
+  } else if (def.kind === "targets") {
+    const pos = subjectPosition();
+    let best = null, bestDist = Infinity;
+    for (const t of missionTargets) {
+      if (!t.alive) continue;
+      const d = Math.hypot(t.x - pos.x, t.z - pos.z);
+      if (d < bestDist) { bestDist = d; best = t; }
+    }
+    if (best) list.push({ x: best.x, z: best.z, r: 1, primary: true, style: "target" });
+  }
+
+  return list;
+}
+
+function missionObjective(m) {
+  const def = m.def;
+
+  if (def.needs === "car" && !inVehicleNow()) return "GET IN A VEHICLE";
+  if (def.needs === "foot" && !def.gun && inVehicleNow()) return "GET OUT AND GO ON FOOT";
+
+  switch (def.kind) {
+    case "route": {
+      const p = m.points[m.index];
+      return p ? p.label : "";
+    }
+    case "collect":
+      return "COLLECT THE PACKAGES  (" + (m.total - m.progress) + " LEFT)";
+    case "targets":
+      if (inVehicleNow()) return "GET OUT OF THE VEHICLE";
+      if (currentWeapon < 0) return "DRAW A GUN  (KEYS 1 - 3)";
+      return "SHOOT THE TARGETS  (" + (m.total - m.progress) + " LEFT)";
+    case "speed":
+      return m.phase === 0
+        ? "REACH " + def.reach + " KM/H"
+        : "STAY ABOVE " + def.keep + " KM/H  " + Math.floor(m.hold) + " / " + def.hold + " S";
+    case "drift":
+      return "DRIFT!  " + Math.floor(m.counter) + " / " + def.seconds + " S";
+    case "nitro":
+      return "HOLD SHIFT FOR NITRO  " + Math.floor(m.counter) + " / " + def.seconds + " S";
+    case "distance":
+      return "DRIVE " + Math.floor(m.counter) + " / " + def.meters + " M WITHOUT CRASHING";
+  }
+  return "";
+}
+
+function missionProgressText(m) {
+  const def = m.def;
+  if (def.kind === "route" || def.kind === "collect" || def.kind === "targets") {
+    return m.progress + " / " + m.total;
+  }
+  return "";
+}
+
+function missionProgressFraction(m) {
+  const def = m.def;
+  if (def.kind === "route" || def.kind === "collect" || def.kind === "targets") return m.total ? m.progress / m.total : 0;
+  if (def.kind === "speed") return m.phase === 0 ? 0 : Math.min(1, m.hold / def.hold);
+  if (def.kind === "drift" || def.kind === "nitro") return Math.min(1, m.counter / def.seconds);
+  if (def.kind === "distance") return Math.min(1, m.counter / def.meters);
+  return 0;
+}
+
+function missionMapTargets() {
+  return activeMission ? missionTargetList(activeMission) : [];
+}
+
+function startMission(def) {
+  if (!started || paused) return false;
+
+  if (def.ownerOnly && !isOwner()) {
+    showMessage("OWNER ONLY MISSION");
+    return false;
+  }
+
+  cancelMission(true);
+
+  const m = { def, time: def.time || 0, progress: 0, total: 1, index: 0, phase: 0, hold: 0, counter: 0, points: [], items: [] };
+
+  if (def.kind === "route") {
+    m.points = def.points();
+    m.total = m.points.length;
+  } else if (def.kind === "collect") {
+    for (let i = 0; i < def.count; i++) {
+      const road = pick(roadLines);
+      const t = rand(-800, 800);
+      const alongX = Math.random() > .5;
+      m.items.push({ x: alongX ? t : road, z: alongX ? road : t, got: false });
+    }
+    m.total = def.count;
+  } else if (def.kind === "targets") {
+    spawnMissionTargets(makeTargetSpawns(def.spawn()));
+    m.total = missionTargets.length || 1;
+    if (def.gun && currentWeapon < 0 && !inVehicleNow()) selectWeapon(0);
+  }
+
+  activeMission = m;
+  missionBanner.timer = 0;
+  showMessage("MISSION STARTED: " + def.title);
+  playMissionChime(true);
+  return true;
+}
+
+function endMissionState() {
+  activeMission = null;
+  clearMissionTargets();
+}
+
+function cancelMission(silent = false) {
+  if (!activeMission) return;
+  endMissionState();
+  if (!silent) showMessage("MISSION CANCELLED");
+}
+
+function completeMission() {
+  const m = activeMission;
+  const def = m.def;
+  const bonus = def.time ? Math.floor(Math.max(0, m.time) * 2) : 0;
+  const total = def.reward + bonus;
+
+  cash += total;
+  missionSave.done[def.id] = (missionSave.done[def.id] || 0) + 1;
+  saveMissions();
+
+  missionBanner.text = "MISSION COMPLETE";
+  missionBanner.sub = def.title + "  +$" + total.toLocaleString("en-US") + (bonus ? "  (TIME BONUS $" + bonus + ")" : "");
+  missionBanner.good = true;
+  missionBanner.timer = 5;
+
+  showMessage("MISSION COMPLETE  +$" + total.toLocaleString("en-US"));
+  playMissionChime(true);
+  endMissionState();
+}
+
+function failMission(reason) {
+  if (!activeMission) return;
+
+  missionBanner.text = "MISSION FAILED";
+  missionBanner.sub = reason;
+  missionBanner.good = false;
+  missionBanner.timer = 4;
+
+  showMessage("MISSION FAILED — " + reason);
+  playMissionChime(false);
+  endMissionState();
+}
+
+// Called by the car physics when the car crashes
+function missionOnCrash() {
+  if (activeMission && activeMission.def.kind === "distance" && activeMission.counter > 0) {
+    activeMission.counter = 0;
+    showMessage("CRASH — DISTANCE RESET");
+  }
+}
+
+function playMissionChime(good) {
+  const audio = getSfx();
+  if (!audio) return;
+  const t = audio.context.currentTime;
+  const notes = good ? [520, 660, 880] : [330, 247];
+  notes.forEach((f, i) => toneBurst(audio, t + i * .12, f, f * .98, .25, .25, "triangle"));
+}
+
+function stepMission(m, dt) {
+  const def = m.def;
+
+  if (def.time) {
+    m.time -= dt;
+    if (m.time <= 0) return "fail";
+  }
+
+  if (def.needs === "car" && !inVehicleNow()) return null;
+  if (def.needs === "foot" && inVehicleNow()) return null;
+
+  const pos = subjectPosition();
+  const driverNow = driving && mySeat === 0 && engineRunning;
+  const kmh = Math.abs(carSpeed) * 3.6;
+
+  switch (def.kind) {
+    case "route": {
+      const p = m.points[m.index];
+      if (p && Math.hypot(pos.x - p.x, pos.z - p.z) < missionRadius(m, p)) {
+        m.index++;
+        m.progress = m.index;
+        if (m.index >= m.total) return "done";
+        showMessage("CHECKPOINT  " + m.index + " / " + m.total);
+        playMissionChime(true);
+      }
+      break;
+    }
+
+    case "collect":
+      for (const item of m.items) {
+        if (!item.got && Math.hypot(pos.x - item.x, pos.z - item.z) < 3.8) {
+          item.got = true;
+          m.progress++;
+          showMessage("PACKAGE  " + m.progress + " / " + m.total);
+          playMissionChime(true);
+        }
+      }
+      if (m.progress >= m.total) return "done";
+      break;
+
+    case "targets": {
+      const alive = missionTargets.filter(t => t.alive).length;
+      m.progress = m.total - alive;
+      if (alive === 0 && m.total > 0) return "done";
+      break;
+    }
+
+    case "speed":
+      if (!driverNow) break;
+      if (m.phase === 0) {
+        if (kmh >= def.reach) {
+          m.phase = 1;
+          showMessage("NOW HOLD IT!");
+        }
+      } else if (kmh >= def.keep) {
+        m.hold += dt;
+        if (m.hold >= def.hold) return "done";
+      } else {
+        m.hold = 0;
+      }
+      break;
+
+    case "drift":
+      if (driverNow && Math.abs(carLateral) > 3 && Math.abs(carSpeed) > 10) {
+        m.counter += dt;
+        if (m.counter >= def.seconds) return "done";
+      }
+      break;
+
+    case "nitro":
+      if (driverNow && nitroActive) {
+        m.counter += dt;
+        if (m.counter >= def.seconds) return "done";
+      }
+      break;
+
+    case "distance":
+      if (driverNow) {
+        m.counter += Math.abs(carSpeed) * dt;
+        if (m.counter >= def.meters) return "done";
+      }
+      break;
+  }
+
+  return null;
+}
+
+/* ---------- mission panel (bottom-left) and mission list ---------- */
+
+/* =========================================================
+   PHONE POLISH — INTERFACE SIZE, READABILITY, BIG MAP
+   ========================================================= */
+
+const UI_SCALES = [.85, 1, 1.15, 1.3];
+let uiScale = 1;
+let uiScaleManual = false;
+
+try {
+  const savedScale = Number(localStorage.getItem("viceUiScale"));
+  if (savedScale > 0) { uiScale = savedScale; uiScaleManual = true; }
+} catch (error) { /* storage not available */ }
+
+function autoUiScale() {
+  const small = Math.min(innerWidth, innerHeight);
+  return small < 380 ? .9 : small < 520 ? 1 : small < 800 ? 1.1 : 1.25;
+}
+
+function applyUiScale() {
+  document.documentElement.style.setProperty("--ui", String(uiScaleManual ? uiScale : autoUiScale()));
+}
+
+function cycleUiScale() {
+  const current = uiScaleManual ? uiScale : autoUiScale();
+  let index = UI_SCALES.findIndex(v => Math.abs(v - current) < .05);
+  index = (index + 1) % UI_SCALES.length;
+  uiScale = UI_SCALES[index];
+  uiScaleManual = true;
+  try { localStorage.setItem("viceUiScale", String(uiScale)); } catch (error) { /* ignore */ }
+  applyUiScale();
+  showMessage("INTERFACE SIZE: " + Math.round(uiScale * 100) + "%");
+}
+
+window.addEventListener("resize", applyUiScale);
+applyUiScale();
+
+const phoneStyle = document.createElement("style");
+phoneStyle.textContent = `
+body.vice-touch #vice-stick{transform:scale(var(--ui,1));transform-origin:left bottom}
+body.vice-touch #vice-touch-right{transform:scale(var(--ui,1));transform-origin:right bottom}
+body.vice-touch #vice-touch-top{transform:translateX(-50%) scale(var(--ui,1));transform-origin:top center;flex-wrap:wrap;justify-content:center;max-width:96vw;gap:6px}
+body.vice-touch .vt-sys{width:42px;height:36px;font-size:9px}
+body.vice-touch .vt-btn{font-size:12px}
+body.vice-touch #vice-combat{transform:translateX(-50%) scale(var(--ui,1));transform-origin:bottom center}
+body.vice-touch #vice-bars{transform:translateX(-50%) scale(var(--ui,1));transform-origin:bottom center}
+body.vice-touch #vice-money{transform:scale(var(--ui,1));transform-origin:top right;font-size:12px}
+body.vice-touch #vice-chat{top:calc(100px + env(safe-area-inset-top,0px))}
+body.vice-touch #message{position:fixed!important;top:calc(56px + env(safe-area-inset-top,0px))!important;left:50%!important;right:auto!important;bottom:auto!important;transform:translateX(-50%)!important;max-width:78vw;text-align:center;font-size:15px!important;font-weight:bold;line-height:1.3;padding:6px 12px;border-radius:8px;background:rgba(0,0,0,.62);text-shadow:0 2px 6px #000;z-index:10010;pointer-events:none}
+#minimap{cursor:pointer}
+`;
+document.head.appendChild(phoneStyle);
+
+const missionStyle = document.createElement("style");
+missionStyle.textContent = `
+#vice-mission{position:fixed;left:calc(14px + env(safe-area-inset-left,0px));bottom:calc(14px + env(safe-area-inset-bottom,0px));width:min(262px,72vw);z-index:9000;display:none;box-sizing:border-box;color:#fff;font-family:Arial,sans-serif;background:rgba(8,16,24,.74);border:1px solid rgba(255,255,255,.25);border-left:4px solid #ffd45b;border-radius:10px;padding:8px 10px;text-shadow:0 1px 2px #000;pointer-events:none}
+#vice-mission.good{border-left-color:#4cd37b}
+#vice-mission.bad{border-left-color:#e0483a}
+#vice-mission .mh{display:flex;justify-content:space-between;align-items:center;gap:8px}
+#vice-m-title{font-weight:900;font-size:13px;letter-spacing:.8px;color:#ffd45b;line-height:1.2}
+#vice-m-list{pointer-events:auto;flex:0 0 auto;border:1px solid rgba(255,255,255,.6);background:rgba(12,24,36,.9);color:#fff;font:bold 10px Arial,sans-serif;border-radius:6px;padding:4px 8px;cursor:pointer;touch-action:manipulation}
+#vice-m-obj{font-size:12px;font-weight:bold;margin-top:5px;line-height:1.25}
+#vice-mission .mrow{display:flex;justify-content:space-between;font-size:11px;margin-top:4px}
+#vice-m-time.low{color:#ff6b5a}
+#vice-mission .mnav{display:flex;align-items:center;gap:8px;margin-top:5px;font-size:12px;font-weight:bold}
+#vice-m-arrow{display:inline-block;width:22px;height:22px;line-height:22px;text-align:center;font-size:17px;color:#ffd45b}
+#vice-mission .mbar{height:5px;background:rgba(255,255,255,.18);border-radius:3px;margin-top:6px;overflow:hidden}
+#vice-m-fill{height:100%;width:0;background:#4cd37b}
+#vice-missions-menu{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(800px,94vw);max-height:86vh;overflow-y:auto;box-sizing:border-box;padding:16px;background:rgba(8,15,24,.97);border:2px solid #e6b93e;border-radius:14px;color:#fff;font-family:Arial,sans-serif;z-index:10025;touch-action:pan-y;box-shadow:0 15px 55px rgba(0,0,0,.65)}
+#vice-missions-menu.hidden{display:none}
+#vice-missions-menu h2{margin:0 0 4px;text-align:center;color:#ffd45b;font-size:24px}
+#vice-missions-menu .msub{text-align:center;color:#c5d1dc;font-size:12px;margin-bottom:12px}
+#vice-missions-menu h3{margin:14px 0 6px;color:#9fd9ff;font-size:12px;letter-spacing:1.5px}
+.vice-mcards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+.vice-mcard{text-align:left;padding:11px;border-radius:10px;border:1px solid #65717e;background:#172431;color:#fff;cursor:pointer;font-family:Arial,sans-serif;touch-action:manipulation}
+.vice-mcard:hover{background:#293b4c;border-color:#ffd45b}
+.vice-mcard.locked{opacity:.45;cursor:not-allowed}
+.vice-mcard .mt{display:flex;justify-content:space-between;gap:6px;color:#ffd45b;font-weight:bold;font-size:14px}
+.vice-mcard .mb{display:block;margin-top:4px;color:#d7e0e8;font-size:11px;line-height:1.4}
+.vice-mcard .mr{display:block;margin-top:6px;color:#8ff0a4;font-size:12px;font-weight:bold}
+.vice-mcard .done{color:#8ff0a4}
+#vice-missions-footer{display:flex;gap:10px;justify-content:space-between;flex-wrap:wrap;margin-top:14px}
+#vice-missions-footer button{padding:10px 16px;border:0;border-radius:8px;background:#d6a62e;color:#151515;font-weight:bold;cursor:pointer}
+#vice-missions-footer button.secondary{background:#374657;color:#fff}
+@media(max-width:560px){.vice-mcards{grid-template-columns:1fr}#vice-missions-menu h2{font-size:20px}}
+body.vice-touch #vice-mission{bottom:calc(172px + env(safe-area-inset-bottom,0px));width:clamp(150px,30vw,214px);padding:6px 8px;transform:scale(var(--ui,1));transform-origin:left bottom}
+body.vice-touch #vice-m-obj{font-size:11px}
+body.vice-touch #vice-m-title{font-size:12px}
+`;
+document.head.appendChild(missionStyle);
+
+const missionPanel2 = document.createElement("div");
+missionPanel2.id = "vice-mission";
+missionPanel2.innerHTML =
+  '<div class="mh"><span id="vice-m-title"></span><button id="vice-m-list" type="button" tabindex="-1">LIST [M]</button></div>' +
+  '<div id="vice-m-obj"></div>' +
+  '<div class="mrow"><span id="vice-m-prog"></span><span id="vice-m-time"></span></div>' +
+  '<div class="mnav"><span id="vice-m-arrow">▲</span><span id="vice-m-dist"></span></div>' +
+  '<div class="mbar"><div id="vice-m-fill"></div></div>';
+document.body.appendChild(missionPanel2);
+
+const mTitle = document.getElementById("vice-m-title");
+const mObj = document.getElementById("vice-m-obj");
+const mProg = document.getElementById("vice-m-prog");
+const mTime = document.getElementById("vice-m-time");
+const mArrow = document.getElementById("vice-m-arrow");
+const mDist = document.getElementById("vice-m-dist");
+const mFill = document.getElementById("vice-m-fill");
+const mNav = missionPanel2.querySelector(".mnav");
+
+document.getElementById("vice-m-list").addEventListener("mousedown", event => event.preventDefault());
+document.getElementById("vice-m-list").addEventListener("click", event => {
+  toggleMissionMenu();
+  event.currentTarget.blur();
+});
+
+const camDirection = new THREE.Vector3();
+let missionPanelTimer = 0;
+let lastMissionKey = "";
+
+function formatTime(seconds) {
+  const s = Math.max(0, Math.ceil(seconds));
+  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+}
+
+function updateMissionPanel(dt) {
+  const show = started && !paused;
+  missionPanel2.style.display = show ? "block" : "none";
+  if (!show) return;
+
+  missionPanelTimer -= dt;
+  if (missionPanelTimer > 0) return;
+  missionPanelTimer = .1;
+
+  let title, objective, progress, timeText, timeLow = false, fraction = 0, navText = "", arrowDeg = null;
+  let state = "";
+
+  if (missionBanner.timer > 0 && !activeMission) {
+    title = missionBanner.text;
+    objective = missionBanner.sub;
+    progress = ""; timeText = "";
+    state = missionBanner.good ? "good" : "bad";
+    fraction = missionBanner.good ? 1 : 0;
+  } else if (!activeMission) {
+    title = "MISSIONS";
+    objective = touchUIActive ? "Tap LIST to pick a job" : "Press M to pick a job";
+    progress = ""; timeText = "";
+  } else {
+    const m = activeMission;
+    title = m.def.title;
+    objective = missionObjective(m);
+    progress = missionProgressText(m);
+    timeText = m.def.time ? formatTime(m.time) : "";
+    timeLow = m.def.time && m.time < 15;
+    fraction = missionProgressFraction(m);
+
+    const list = missionTargetList(m);
+    const target = list.find(item => item.primary) || list[0];
+
+    if (target) {
+      const pos = subjectPosition();
+      const dx = target.x - pos.x, dz = target.z - pos.z;
+      navText = Math.round(Math.hypot(dx, dz)) + " m";
+      camera.getWorldDirection(camDirection);
+      const diff = Math.atan2(dx, dz) - Math.atan2(camDirection.x, camDirection.z);
+      arrowDeg = -diff * 180 / Math.PI;
     }
   }
+
+  const key = [title, objective, progress, timeText, timeLow, navText, Math.round(fraction * 100), state].join("|");
+  if (key !== lastMissionKey) {
+    lastMissionKey = key;
+    mTitle.textContent = title;
+    mObj.textContent = objective;
+    mProg.textContent = progress;
+    mTime.textContent = timeText;
+    mTime.classList.toggle("low", !!timeLow);
+    mFill.style.width = Math.round(fraction * 100) + "%";
+    missionPanel2.classList.toggle("good", state === "good");
+    missionPanel2.classList.toggle("bad", state === "bad");
+    mDist.textContent = navText;
+    mNav.style.display = navText ? "flex" : "none";
+  }
+
+  if (arrowDeg !== null) mArrow.style.transform = "rotate(" + arrowDeg.toFixed(0) + "deg)";
+}
+
+function syncMissionMarkers() {
+  const list = activeMission ? missionTargetList(activeMission) : [];
+  const time = performance.now() * .002;
+
+  primaryMarker.group.visible = false;
+  for (const marker of packageMarkers) marker.group.visible = false;
+
+  let packageIndex = 0;
+  for (const item of list) {
+    if (item.style === "target") continue;
+
+    if (item.primary) {
+      placeMarker(primaryMarker, item, 140, time);
+    } else if (packageIndex < packageMarkers.length) {
+      placeMarker(packageMarkers[packageIndex++], item, 18, time + packageIndex);
+    }
+  }
+}
+
+const missionMenu = document.createElement("div");
+missionMenu.id = "vice-missions-menu";
+missionMenu.className = "hidden";
+document.body.appendChild(missionMenu);
+
+function buildMissionMenu() {
+  missionMenu.replaceChildren();
+
+  const title = document.createElement("h2");
+  title.textContent = "MISSIONS";
+  const sub = document.createElement("div");
+  sub.className = "msub";
+  const total = MISSION_DEFS.length;
+  const done = MISSION_DEFS.filter(d => missionSave.done[d.id]).length;
+  sub.textContent = "Pick a job, follow the beam and get paid.   Completed " + done + " / " + total + "   ·   Cash $" + cash.toLocaleString("en-US");
+  missionMenu.append(title, sub);
+
+  for (const category of MISSION_CATEGORIES) {
+    const defs = MISSION_DEFS.filter(d => d.category === category);
+    if (!defs.length) continue;
+
+    const heading = document.createElement("h3");
+    heading.textContent = category;
+    const grid = document.createElement("div");
+    grid.className = "vice-mcards";
+
+    for (const def of defs) {
+      const locked = def.ownerOnly && !isOwner();
+      const card = document.createElement("button");
+      card.type = "button";
+      card.tabIndex = -1;
+      card.className = "vice-mcard" + (locked ? " locked" : "");
+
+      const top = document.createElement("span");
+      top.className = "mt";
+      const name = document.createElement("span");
+      name.textContent = def.title;
+      const status = document.createElement("span");
+      status.className = "done";
+      status.textContent = missionSave.done[def.id] ? "✓ x" + missionSave.done[def.id] : "";
+      top.append(name, status);
+
+      const brief = document.createElement("span");
+      brief.className = "mb";
+      brief.textContent = def.brief;
+
+      const reward = document.createElement("span");
+      reward.className = "mr";
+      reward.textContent = locked
+        ? "OWNER ONLY"
+        : "REWARD $" + def.reward + (def.time ? "   ·   TIME " + formatTime(def.time) : "   ·   NO TIME LIMIT");
+
+      card.append(top, brief, reward);
+      card.addEventListener("click", () => {
+        if (locked) { showMessage("OWNER ONLY MISSION"); return; }
+        if (startMission(def)) closeGarage();
+      });
+      grid.appendChild(card);
+    }
+
+    missionMenu.append(heading, grid);
+  }
+
+  const footer = document.createElement("div");
+  footer.id = "vice-missions-footer";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "secondary";
+  cancel.textContent = "CANCEL CURRENT MISSION";
+  cancel.addEventListener("click", () => { cancelMission(false); closeGarage(); });
+  const close = document.createElement("button");
+  close.type = "button";
+  close.textContent = "CLOSE  [M / ESC]";
+  close.addEventListener("click", () => closeGarage());
+  footer.append(cancel, close);
+  missionMenu.appendChild(footer);
+}
+
+function openMissionMenu() {
+  if (!started || paused || chatOpen) return;
+  releaseMouse();
+  buildMissionMenu();
+  garagePanel.classList.add("hidden");
+  missionMenu.classList.remove("hidden");
+  garageOpen = true;          // freezes the controls while the list is open
+  clearControls();
+}
+
+function toggleMissionMenu() {
+  if (!missionMenu.classList.contains("hidden")) closeGarage();
+  else openMissionMenu();
+}
+
+function updateMission(dt) {
+  updateMissionTargets(dt);
+  if (missionBanner.timer > 0) missionBanner.timer -= dt;
+
+  if (activeMission && !playerDead) {
+    const result = stepMission(activeMission, dt);
+    if (result === "done") completeMission();
+    else if (result === "fail") failMission("TIME'S UP");
+  }
+
+  syncMissionMarkers();
+  updateMissionPanel(dt);
 }
 
 /* =========================================================
@@ -3766,7 +4595,7 @@ window.addEventListener("keydown", event => {
   }
 
   if (garageOpen) {
-    if (key === "v" || key === "escape") {
+    if (key === "v" || key === "escape" || key === "m") {
       event.preventDefault();
       closeGarage();
     }
@@ -3803,6 +4632,8 @@ window.addEventListener("keydown", event => {
   if (key === "l" && !event.repeat && started) toggleMouseLock();
   if (key === "x" && !event.repeat && started) cycleWeapon(1);
   if (key === "k" && !event.repeat && started) cycleSeat();
+  if (key === "m" && !event.repeat && started) toggleMissionMenu();
+  if (key === "o" && !event.repeat && started) goHome();
 
   if (key === "c" && !event.repeat && driving) {
     const color = pick(carPaints);
@@ -3854,6 +4685,13 @@ function toggleVehicle() {
   }
 
   if (!driving) {
+    // The owner's showcase cars in the villa garage
+    const showcase = findShowcaseCar();
+    if (showcase && showcase.dist < player.position.distanceTo(car.position)) {
+      takeShowcaseCar(showcase.entry);
+      return;
+    }
+
     // Another player's vehicle that is closer than mine: get in as a passenger
     const host = findBoardableRemote();
     if (host && host.dist < player.position.distanceTo(car.position)) {
@@ -3994,7 +4832,8 @@ function updatePlayer(dt) {
   const analog = keyMove ? 1 : clamp(Math.abs(controls.axisY) * 1.25, .45, 1);
   const target = (forward
     ? (sprinting ? SPRINT_SPEED : WALK_SPEED)
-    : backward ? BACK_SPEED : 0) * analog;
+    : backward ? BACK_SPEED : 0) * analog *
+    (inVillaWater(player.position.x, player.position.z) ? .55 : 1);
   playerSpeedNow += (target - playerSpeedNow) * Math.min(1, dt * (target > playerSpeedNow ? 7 : 11));
   if (playerSpeedNow < .05 && target === 0) playerSpeedNow = 0;
 
@@ -4097,7 +4936,7 @@ function updateCar(dt) {
   let vF = carVel.x * fx + carVel.y * fz;     // forward speed
 
   const surface = groundType(car.position.x, car.position.z);
-  const offroad = surface >= 2;
+  const offroad = surface === 2 || surface === 3;
 
   // ---- Nitro ----
   nitroActive = false;
@@ -4176,7 +5015,7 @@ function updateCar(dt) {
   carLateral = vL;
 
   // ---- Move with collision and bounce ----
-  const opts = { traffic: true, pedestrians: true };
+  const opts = { traffic: true, pedestrians: true, vehicle: true };
   let impact = 0;
 
   // Hard hits bounce a little; light scrapes just slide along the wall
@@ -4200,6 +5039,7 @@ function updateCar(dt) {
 
   if (impact > 6 && driving && crashCooldown <= 0) {
     crashCooldown = .6;
+    missionOnCrash();
     camShake = Math.max(camShake, Math.min(1.2, impact / 18));
     showMessage("CRASH");
     playCrashSound(Math.min(1, impact / 25));
@@ -4558,9 +5398,7 @@ document.body.appendChild(moneyBadge);
 let lastMoneyLabel = "";
 
 function updateMoneyBadge() {
-  const label =
-    "$" + cash.toLocaleString("en-US") + "  ·  CP " +
-    (checkpointIndex + 1) + "/" + checkpoints.length;
+  const label = "$" + cash.toLocaleString("en-US");
 
   if (label !== lastMoneyLabel) {
     lastMoneyLabel = label;
@@ -4618,8 +5456,55 @@ function hideLegacyHud() {
   }
 }
 
-setTimeout(hideLegacyHud, 0);
-setTimeout(hideLegacyHud, 1500);
+// Finds any leftover speed read-out / speed bar from the old HTML and hides it
+function hideSpeedWidgets() {
+  const guards = [
+    startScreen, pauseScreen, missionPanel, minimap,
+    connectionElement, playerCountElement, hud.message
+  ].filter(Boolean);
+
+  const visible = el => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  };
+
+  const found = [];
+
+  document.querySelectorAll("body *").forEach(el => {
+    if (["SCRIPT", "STYLE", "CANVAS"].includes(el.tagName)) return;
+    if (el.closest("[id^='vice-']") || el.closest(".vt-btn")) return;
+    if (guards.some(g => g.contains(el))) return;
+
+    const text = (el.textContent || "").trim();
+    const label = (el.id + " " + (typeof el.className === "string" ? el.className : "")).toLowerCase();
+    const looksLikeSpeed = /speed|speedo|kmh|km-h/.test(label) ||
+      (el.children.length === 0 && /^\d{0,3}\s*(km\/?h|kph|mph)$/i.test(text));
+
+    if (looksLikeSpeed && visible(el)) found.push(el);
+  });
+
+  for (const el of found) {
+    let node = el;
+    node.style.setProperty("display", "none", "important");
+
+    // also hide small wrappers that only held the speed read-out
+    while (
+      node.parentElement &&
+      node.parentElement !== document.body &&
+      !guards.some(g => g.contains(node.parentElement) || node.parentElement.contains(g)) &&
+      !node.parentElement.querySelector("canvas, input, button") &&
+      (node.parentElement.textContent || "").trim().length <= 24
+    ) {
+      node = node.parentElement;
+      node.style.setProperty("display", "none", "important");
+    }
+  }
+}
+
+[0, 800, 2500, 6000].forEach(delay => {
+  setTimeout(hideLegacyHud, delay);
+  setTimeout(hideSpeedWidgets, delay + 200);
+});
 
 function updateHUD(dt) {
   updateMoneyBadge();
@@ -4802,6 +5687,10 @@ function buildTouchUI() {
   touchTop.appendChild(makeSys("CARS", () => toggleGarage()));
   touchTop.appendChild(makeSys("SKY", () => cycleWeather()));
   touchTop.appendChild(makeSys("VIEW", () => togglePOV()));
+  touchTop.appendChild(makeSys("HOME", () => goHome()));
+  touchTop.appendChild(makeSys("MSN", () => toggleMissionMenu()));
+  touchTop.appendChild(makeSys("UI", () => cycleUiScale()));
+  touchTop.appendChild(makeSys("GFX", () => cycleQuality()));
 
   if (document.fullscreenEnabled || document.webkitFullscreenEnabled) {
     touchTop.appendChild(makeSys("FULL", toggleFullscreen));
@@ -4907,7 +5796,8 @@ function positionMinimap() {
     }
   }
 
-  const size = Math.min(innerWidth, innerHeight) < 600 ? 108 : 180;
+  const smallScreen = Math.min(innerWidth, innerHeight) < 600;
+  const size = minimapBig ? (smallScreen ? 230 : 320) : (smallScreen ? 120 : 180);
 
   if (moneyBadge) {
     moneyBadge.style.top = top + "px";
@@ -4927,8 +5817,17 @@ function positionMinimap() {
   set("width", size + "px");
   set("height", "auto");
   set("z-index", "10000");
-  set("pointer-events", "none");
+  set("pointer-events", "auto");
   set("display", started ? "block" : "none");
+}
+
+// Tap (or click) the map to make it bigger or smaller
+let minimapBig = false;
+if (minimap) {
+  minimap.addEventListener("click", () => {
+    minimapBig = !minimapBig;
+    positionMinimap();
+  });
 }
 
 window.addEventListener("resize", positionMinimap);
@@ -4995,17 +5894,28 @@ function drawMinimap() {
 
   mapContext.drawImage(minimapBackground, 0, 0);
 
-  // Checkpoints: the active one is larger and brighter
-  checkpoints.forEach((p, i) => {
-    const active = i === checkpointIndex;
-    mapContext.fillStyle = active ? "#fff07a" : "#c79a2c";
+  // The villa (gold = yours, grey = private)
+  const villaX = cx + VILLA.x * scale, villaY = cy + VILLA.z * scale;
+  const villaSize = Math.max(5, w * .035);
+  mapContext.fillStyle = isOwner() ? "#4cd37b" : "#b9a05a";
+  mapContext.fillRect(villaX - villaSize / 2, villaY - villaSize / 2, villaSize, villaSize);
+  mapContext.strokeStyle = "#000";
+  mapContext.lineWidth = 1;
+  mapContext.strokeRect(villaX - villaSize / 2, villaY - villaSize / 2, villaSize, villaSize);
+
+  // Mission targets: the nearest one is bigger and brighter
+  const dot = Math.max(3, w * .022);
+  for (const item of missionMapTargets()) {
+    const tx = cx + item.x * scale, ty = cy + item.z * scale;
+    mapContext.fillStyle = item.primary ? "#fff07a" : "#33e0ff";
     mapContext.beginPath();
-    mapContext.arc(
-      cx + p.position.x * scale, cy + p.position.z * scale,
-      active ? 4 : 2, 0, Math.PI * 2
-    );
+    mapContext.arc(tx, ty, item.primary ? dot * 1.5 : dot, 0, Math.PI * 2);
     mapContext.fill();
-  });
+    if (item.primary) {
+      mapContext.strokeStyle = "#000";
+      mapContext.stroke();
+    }
+  }
 
   mapContext.fillStyle = "#55d9ff";
   for (const remote of remotePlayers.values()) {
@@ -5119,6 +6029,8 @@ function startGame() {
   if (pauseScreen) pauseScreen.classList.add("hidden");
 
   showMessage("WELCOME TO VICE CITY");
+  setTimeout(hideSpeedWidgets, 300);
+  setTimeout(() => showMessage(touchUIActive ? "TAP LIST TO PICK A MISSION" : "PRESS M TO PICK A MISSION"), 3000);
   updateVehicleButtons();
 }
 
@@ -5169,8 +6081,7 @@ function restartGame() {
   jumping = false;
   verticalVelocity = 0;
 
-  cash = 0;
-  checkpointIndex = 0;
+  cancelMission(true);
   paused = false;
   clearControls();
 
@@ -5502,6 +6413,532 @@ function createExtraBillboard(lines, x, y, z, colors, glow) {
 }
 
 /* =========================================================
+   THE OWNER'S VILLA  (a gated estate with every facility)
+   ========================================================= */
+
+const villaState = {
+  ready: false, time: 0, gateOpen: 0, gatePanels: [], gateColliders: [],
+  droplets: [], rotorMain: null, rotorTail: null, flag: null, waterMat: null,
+  showcase: [], noticeTimer: 0, tipTimer: 0, greeted: false
+};
+
+const villaWhiteMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+const villaLampMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+
+function villaSignTexture(text) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1024;
+  canvas.height = 128;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#1b1e24";
+  ctx.fillRect(0, 0, 1024, 128);
+  ctx.strokeStyle = "#d4af37";
+  ctx.lineWidth = 8;
+  ctx.strokeRect(6, 6, 1012, 116);
+  ctx.fillStyle = "#e9c75a";
+  ctx.font = "bold 78px Georgia, serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, 512, 68);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function createVilla() {
+  const X = VILLA.x, Z = VILLA.z, GY = -.44;   // GY = ground level inside the (raised) world group
+  const boxes = [], cyls = [], sphs = [], cones = [], lamps = [], waters = [], waterCyls = [];
+
+  const vb = (x, z, w, d, y0, h, color, solid = false) => {
+    boxes.push([X + x, GY + y0 + h / 2, Z + z, w, h, d, color]);
+    if (solid) buildings.push({ x: X + x, z: Z + z, width: w, depth: d, height: y0 + h });
+  };
+  const vc = (x, z, r, y0, h, color) => cyls.push([X + x, GY + y0 + h / 2, Z + z, r, h, r, color]);
+  const vs = (x, y, z, sx, sy, sz, color) => sphs.push([X + x, GY + y, Z + z, sx, sy, sz, color]);
+  const vcone = (x, y0, z, r, h, color) => cones.push([X + x, GY + y0 + h / 2, Z + z, r, h, r, color]);
+  const vlamp = (x, y, z, r, color = 0xfff0c0) => lamps.push([X + x, GY + y, Z + z, r, r, r, color]);
+  const solid = (x, z, w, d, h) => buildings.push({ x: X + x, z: Z + z, width: w, depth: d, height: h });
+  const wallX = (x0, x1, z, h, t, color) => vb((x0 + x1) / 2, z, x1 - x0, t, 0, h, color, true);
+  const wallZ = (z0, z1, x, h, t, color) => vb(x, (z0 + z1) / 2, t, z1 - z0, 0, h, color, true);
+  const seg = (list, fn) => list.forEach(([a, b]) => fn(a, b));
+
+  const PLASTER = 0xf1ece0, STONE = 0xd9d2c0, DARKC = 0x2b2f36, GLASS = 0x1d3b52, WOOD = 0x6b4a32;
+  const GOLD = 0xd4af37, ASPHALT = 0x3b3f45, PAVER = 0xb5ab98, HEDGE = 0x2f6b3a, WHITE = 0xf6f4ee;
+
+  /* ----- lawn platform (top is exactly at road level) ----- */
+  boxes.push([X, GY - .25, Z, 164, .5, 164, 0x4f8c40]);
+  for (let i = -7; i <= 7; i += 2) boxes.push([X, GY + .01, Z + i * 10, 164, .02, 5, 0x5a9a48]);
+
+  /* ----- boundary wall, pillars and gate ----- */
+  const capWall = (x0, x1, z) => vb((x0 + x1) / 2, z, x1 - x0 + .4, 1.6, 3.2, .3, 0xb9ad98);
+  wallX(-80, 80, -79.4, 3.2, 1.2, STONE); capWall(-80, 80, -79.4);
+  wallZ(-80, 80, -79.4, 3.2, 1.2, STONE); vb(-79.4, 0, 1.6, 160.4, 3.2, .3, 0xb9ad98);
+  wallZ(-80, 80, 79.4, 3.2, 1.2, STONE); vb(79.4, 0, 1.6, 160.4, 3.2, .3, 0xb9ad98);
+  wallX(-80, -7.8, 79.4, 3.2, 1.2, STONE); capWall(-80, -7.8, 79.4);
+  wallX(7.8, 80, 79.4, 3.2, 1.2, STONE); capWall(7.8, 80, 79.4);
+
+  for (const px of [-60, -40, -20, 0, 20, 40, 60]) {
+    vb(px, -79.4, 2, 2, 0, 4.2, 0xcfc6b2); vlamp(px, 4.6, -79.4, .45);
+  }
+  for (const pz of [-60, -40, -20, 0, 20, 40, 60]) {
+    vb(-79.4, pz, 2, 2, 0, 4.2, 0xcfc6b2); vlamp(-79.4, 4.6, pz, .45);
+    vb(79.4, pz, 2, 2, 0, 4.2, 0xcfc6b2); vlamp(79.4, 4.6, pz, .45);
+  }
+  for (const px of [-60, -40, -20, 20, 40, 60]) {
+    vb(px, 79.4, 2, 2, 0, 4.2, 0xcfc6b2); vlamp(px, 4.6, 79.4, .45);
+  }
+
+  for (const s of [-1, 1]) {
+    vb(s * 8.4, 79.4, 2.4, 2.4, 0, 5.4, 0xcfc6b2, true);
+    vb(s * 8.4, 79.4, 2.8, 2.8, 5.4, .3, GOLD);
+    vlamp(s * 8.4, 6.1, 79.4, .6);
+  }
+  vb(0, 79.4, 14.4, .7, 3.4, 1.9, DARKC);                 // sign beam above the gate
+
+  // guard house next to the gate
+  vb(-14, 72, 6, 6, 0, 3.2, 0xdad2c0, true);
+  vb(-14, 72, 7.2, 7.2, 3.2, .3, 0x7a4a2e);
+  vb(-14, 75.05, 3.4, .2, 1.2, 1.2, GLASS);
+  vb(-10.95, 72, .2, 3.4, 1.2, 1.2, GLASS);
+
+  /* ----- driveway, fountain roundabout, parking aprons ----- */
+  vb(0, 70, 9, 20, 0, .06, ASPHALT);
+  vc(0, 48, 14, 0, .06, ASPHALT);
+  vc(0, 48, 8.8, 0, .16, 0x4f8c40);
+  vc(0, 48, 5.2, 0, .9, 0xcfc8b6);
+  waterCyls.push([X, GY + .9, Z + 48, 4.6, .1, 4.6]);
+  vc(0, 48, .8, 0, 2.6, 0xcfc8b6);
+  vc(0, 48, 2.2, 2.2, .35, 0xcfc8b6);
+  waterCyls.push([X, GY + 2.58, Z + 48, 1.9, .06, 1.9]);
+  solid(0, 48, 10.4, 10.4, 1);
+  vb(0, 32, 9, 4, 0, .06, ASPHALT);
+  vb(-58, 40, 34, 20, 0, .06, ASPHALT);
+  vb(-27, 48, 28, 8, 0, .06, ASPHALT);
+  vb(55, 37, 8, 18, 0, .06, PAVER);
+  vb(32, 48, 38, 6, 0, .06, PAVER);
+  vb(0, 33, 66, 6, 0, .12, STONE);                           // front terrace
+
+  for (const lz of [74, 66]) {
+    for (const s of [-1, 1]) { vc(s * 5.5, lz, .15, 0, 4.5, 0x333840); vlamp(s * 5.5, 4.8, lz, .5); }
+  }
+  vb(-6.6, 70, .9, 20, 0, 1.1, HEDGE); vb(6.6, 70, .9, 20, 0, 1.1, HEDGE);
+  for (let i = 0; i < 8; i++) {                               // flower beds along the terrace
+    const bx = -24 + i * 6.8;
+    vb(bx, 37.6, 3.6, 1.4, 0, .5, 0x6a4a2e);
+    for (let k = -1; k <= 1; k++) vs(bx + k * 1.1, .75, 37.6, .35, .35, .35, [0xe0392d, 0xf2c230, 0xff7aa8][(i + k + 3) % 3]);
+  }
+
+  /* ----- the mansion: walls, doors, rooms ----- */
+  vb(0, 14, 64, 32, 0, .04, 0xe7e2d6);                        // marble floor
+  seg([[-32, -3], [3, 32]], (a, b) => wallX(a, b, 30, 5, .8, PLASTER));     // front, front door in the middle
+  seg([[-32, -4], [4, 32]], (a, b) => wallX(a, b, -2, 5, .8, PLASTER));     // back, door to the pool
+  wallZ(-2, 30, -32, 5, .8, PLASTER); wallZ(-2, 30, 32, 5, .8, PLASTER);
+  vb(0, 30, 6.4, .9, 3.8, 1.2, PLASTER); vb(0, -2, 8.4, .9, 3.8, 1.2, PLASTER);   // door lintels
+  for (const s of [-1, 1]) { vb(s * 3.2, 30, .4, 1, 0, 3.8, GOLD); vb(s * 4.2, -2, .4, 1, 0, 3.8, GOLD); }
+
+  for (const px of [-12, 12]) seg([[-2, 2], [8, 16], [22, 30]], (a, b) => wallZ(a, b, px, 5, .5, 0xe8e2d4));
+  seg([[-32, -24], [-19, -12]], (a, b) => wallX(a, b, 14, 5, .5, 0xe8e2d4));
+  seg([[12, 19], [24, 32]], (a, b) => wallX(a, b, 14, 5, .5, 0xe8e2d4));
+
+  vb(0, 14, 65, 33, 4.9, .3, 0xcfc8b6);                       // ceiling / terrace slab
+  vb(0, 14, 52, 28, 5.2, 4.4, 0xf3eee3);                      // upper floor
+  addGable(X, GY + 9.6, Z + 14, 52, 28, 3.6, gableMaterials[0]);
+  for (const wx of [-20, -10, 0, 10, 20]) {
+    vb(wx, 28.15, 3.6, .2, 6.6, 2.4, GLASS); vb(wx, -.15, 3.6, .2, 6.6, 2.4, GLASS);
+  }
+  for (const wx of [-26, -20, -14, 14, 20, 26]) vb(wx, 30.45, 3.6, .2, 1.1, 2.6, GLASS);
+  for (const wz of [4, 10, 20, 26]) { vb(-32.45, wz, .2, 3.6, 1.1, 2.6, GLASS); vb(32.45, wz, .2, 3.6, 1.1, 2.6, GLASS); }
+  vb(0, 32.5, 62, 5, 4.9, .4, STONE);                         // balcony slab and columns
+  vb(0, 34.9, 62, .3, 5.3, .9, WHITE);
+  for (const cx of [-27, -16, -5, 5, 16, 27]) vc(cx, 34, .55, 0, 4.9, 0xf3eee3);
+
+  // living room (centre front)
+  vb(0, 22, 14, 9, .04, .03, 0x8b2f3a);
+  vb(0, 27, 9, 2.4, 0, .9, 0x5b6b7a, true); vb(0, 28.1, 9, .6, .9, .9, 0x4a5866);
+  vb(-7, 22, 2.2, 2.2, 0, .9, 0x5b6b7a, true); vb(7, 22, 2.2, 2.2, 0, .9, 0x5b6b7a, true);
+  vb(0, 22, 3.4, 1.8, 0, .5, 0x5a3b25, true);
+  vb(0, 14.8, 9, .6, 0, 1.1, DARKC, true); vb(0, 14.6, 6.4, .15, 1.2, 2.6, 0x0f1318); vb(0, 14.5, 6, .05, 1.35, 2.3, 0x264a73);
+  for (const px of [-10.5, 10.5]) { vc(px, 28.5, .6, 0, 1, 0x9a6a3a); vs(px, 2.1, 28.5, 1, 1.1, 1, 0x2f7a3a); }
+  vs(0, 3.5, 22, .9, .5, .9, 0xffe8a0);
+
+  // entrance hall (centre back): piano, plants, statue
+  vb(4, 6, 3.2, 2.2, 0, 1.1, 0x111418, true); vb(4, 6, 3.2, 2.2, 1.1, .1, 0x111418);
+  for (const px of [-9, 9]) { vc(px, 10, .9, 0, 1.2, 0xcfc8b6); vs(px, 2.2, 10, .8, .8, .8, 0xe9e2d0); }
+  vs(0, 3.6, 6, .9, .5, .9, 0xffe8a0);
+
+  // kitchen (west front) and dining room (west back)
+  vb(-30.8, 22, 1.4, 14, 0, 1, 0xcfc8b6, true); vb(-31.2, 22, .8, 14, 2, 1.2, 0xb8b1a2);
+  vb(-30.6, 15, 1.6, 1.6, 0, 2.2, 0xc0c4c8, true);
+  vb(-22, 24, 8, 2.4, 0, 1.05, 0xd9d4c8, true);
+  for (let i = -3; i <= 3; i += 2) vc(i - 22, 26.2, .35, 0, .8, 0x333840);
+  vb(-22, 6, 10, 2.8, 0, .85, WOOD, true);
+  for (let i = -4; i <= 4; i += 2.2) { vb(-22 + i, 3.7, .8, .8, 0, .9, 0x3a2a1c); vb(-22 + i, 8.3, .8, .8, 0, .9, 0x3a2a1c); }
+  vb(-31, 6, 1, 8, 0, 1, 0x4a3321, true);
+
+  // home cinema (east front) and bar
+  vb(31.4, 22, .2, 10, 1, 3.8, 0xeef1f4); vb(31.5, 22, .1, 10.6, .8, 4.2, DARKC);
+  for (const row of [16, 19.5, 23]) for (const sz of [17, 20, 23, 26]) {
+    vb(row, sz, 1.3, 1.3, 0, .7, 0x7a1f2b); vb(row - .6, sz, .3, 1.3, .7, .8, 0x7a1f2b);
+  }
+  vb(16, 28.6, 6, 1.4, 0, 1.1, 0x3a2a1c, true);
+  for (let i = -2; i <= 2; i += 2) vc(16 + i, 27, .3, 0, .75, 0x333840);
+  for (let i = -2; i <= 2; i++) vs(16 + i * .9, 1.4, 28.6, .12, .3, .12, [0x2f7a3a, 0xa4533a, 0xd4af37][(i + 2) % 3]);
+
+  // master bedroom (east back)
+  vb(26, 5, 6, 4.4, 0, .7, 0xf0eae0, true); vb(26, 2.9, 6.4, .4, .7, 1.6, WOOD);
+  vb(24.5, 3.5, 1.4, .8, .7, .3, 0xffffff); vb(27.5, 3.5, 1.4, .8, .7, .3, 0xffffff);
+  for (const nx of [21.5, 30.5]) vb(nx, 3.2, 1.1, 1.1, 0, .6, WOOD, true);
+  vb(31, 10, 1.2, 5, 0, 3.2, 0x4a3321, true);
+  vb(21, 8, 6, 4, .04, .03, 0x2f4a6b);
+
+  /* ----- garage with the owner's showcase cars ----- */
+  vb(-57, 18, 30, 24, 0, .05, 0x6d7176);
+  wallX(-72, -42, 6, 4.5, .8, STONE); wallZ(6, 30, -72, 4.5, .8, STONE); wallZ(6, 30, -42, 4.5, .8, STONE);
+  vb(-57, 18, 31, 25, 4.5, .4, 0x5a5f66);
+  vb(-57, 30, 30, .8, 3.7, .8, STONE);
+  for (const gx of [-66, -60, -54, -48]) vb(gx, 29.6, .7, .7, 0, 3.7, STONE, true);
+  vb(-57, 6.6, 26, .6, 1.2, 2.6, 0x4a4f58); vb(-57, 6.6, 26, .6, 2.2, 1.4, 0x6b6f75);   // shelves
+  vb(-57, 30.5, 10, .2, 3.7, .6, GOLD);
+
+  /* ----- guest house ----- */
+  vb(56, 17, 28, 22, 0, .04, 0xe0d6c0);
+  wallX(42, 70, 6, 4, .7, PLASTER); wallZ(6, 28, 42, 4, .7, PLASTER); wallZ(6, 28, 70, 4, .7, PLASTER);
+  seg([[42, 54], [58, 70]], (a, b) => wallX(a, b, 28, 4, .7, PLASTER));
+  addGable(X + 56, GY + 4, Z + 17, 28, 22, 3.4, gableMaterials[2]);
+  vb(56, 28.4, 4.4, .9, 3, 1, PLASTER);
+  vb(63, 10, 5, 3.8, 0, .7, 0xdfe8f0, true); vb(50, 24, 5, 2, 0, .9, 0x6a7a5a, true); vb(58, 14, 3, 1.6, 0, .5, WOOD, true);
+  for (const wx of [46, 64]) vb(wx, 28.4, 3, .2, 1.2, 2, GLASS);
+
+  /* ----- pool, deck, loungers, spa ----- */
+  vb(0, -21, 44, 30, 0, .1, STONE);
+  vb(0, -28.5, 26, 1, 0, .3, 0xf6f4ee); vb(0, -15.5, 26, 1, 0, .3, 0xf6f4ee);
+  vb(-12.5, -22, 1, 13, 0, .3, 0xf6f4ee); vb(12.5, -22, 1, 13, 0, .3, 0xf6f4ee);
+  vb(0, -22, 24, 12, .1, .01, 0x2a8fbd);
+  waters.push([X, GY + .22, Z - 22, 24, .06, 12]);
+  for (const lx of [-9, -5, -1, 3, 7, 11]) { vb(lx, -12, 1, 2.2, .1, .4, 0xf8f8f8); vb(lx, -13.1, 1, .3, .3, .9, 0xf8f8f8); }
+  for (const ux of [-7, 5]) { vc(ux, -9.5, .08, 0, 2.6, 0xcccccc); vcone(ux, 2.4, -9.5, 2.3, .6, 0xe9d36a); }
+  vb(15, -22, 3.5, .8, .3, .1, 0xf1f1f1); vb(13.8, -22, .4, .6, 0, .4, 0xcccccc);
+  vc(28, -22, 3.7, 0, .45, STONE);
+  waterCyls.push([X + 28, GY + .42, Z - 22, 3.2, .06, 3.2]);
+  for (const [lx, lz] of [[-12, -28], [12, -28], [-12, -16], [12, -16]]) vlamp(lx, .35, lz, .18, 0x66e0ff);
+
+  /* ----- fitness centre ----- */
+  vb(46, -36, 24, 16, 0, .04, 0x2a5a3a);
+  wallX(34, 58, -44, 4, .6, 0xdcd6c8); wallZ(-44, -28, 34, 4, .6, 0xdcd6c8); wallZ(-44, -28, 58, 4, .6, 0xdcd6c8);
+  seg([[34, 44], [48, 58]], (a, b) => wallX(a, b, -28, 4, .6, 0xdcd6c8));
+  vb(46, -36, 25, 17, 4, .3, 0x5a5f66);
+  for (const wx of [38, 54]) vb(wx, -27.6, 4, .2, 1.2, 2.2, GLASS);
+  for (const tx of [37, 40, 43]) { vb(tx, -40, 1, 2, 0, 1.2, 0x222428, true); vb(tx, -41, .8, .2, 1.2, .5, 0x39a7ff); }
+  vb(52, -34, 2.2, 1, 0, .5, 0x333840, true); vb(52, -34, 3, .15, .9, .15, 0xaaaaaa);
+  vb(56.5, -38, 1, 4, 0, 1, 0x333840, true);
+  for (let i = 0; i < 4; i++) vs(56.5, 1.15, -39.5 + i * 1.1, .3, .3, .3, 0x888c92);
+  vb(46, -43.6, 16, .1, .4, 2.4, 0xcfe3ee);
+
+  /* ----- tennis court and basketball court ----- */
+  vb(-57, -50, 28, 15, 0, .05, 0x2f6f9f);
+  const L = .13;
+  vb(-69, -50, .15, 11, .05, L, WHITE); vb(-45, -50, .15, 11, .05, L, WHITE);
+  vb(-57, -55.5, 24, .15, .05, L, WHITE); vb(-57, -44.5, 24, .15, .05, L, WHITE);
+  vb(-63.4, -50, .15, 8.3, .05, L, WHITE); vb(-50.6, -50, .15, 8.3, .05, L, WHITE); vb(-57, -50, 12.8, .15, .05, L, WHITE);
+  vb(-57, -50, .12, 12, .05, .9, 0xf2f2f2);
+  for (const pz of [-56, -44]) vb(-57, pz, .2, .2, 0, 1.1, 0x333840);
+  for (let i = -14; i <= 14; i += 4.7) { vb(-57 + i, -58.4, .12, .12, 0, 3, 0x1d3b2a); vb(-57 + i, -41.6, .12, .12, 0, 3, 0x1d3b2a); }
+  vb(-57, -58.4, 28.6, .08, 3, .1, 0x1d3b2a); vb(-57, -41.6, 28.6, .08, 3, .1, 0x1d3b2a);
+  vb(-30, -50, 12, 14, 0, .05, 0xb5532a);
+  vb(-30, -50, 11, .12, .05, L, WHITE); vb(-30, -56, 11, .12, .05, L, WHITE);
+  vb(-24.5, -50, .3, .3, 0, 3.4, 0x333840, true); vb(-24.8, -50, .12, 2.4, 2.8, 1.5, 0xffffff);
+
+  /* ----- helipad with a helicopter ----- */
+  vc(56, -62, 11, 0, .12, ASPHALT); vc(56, -62, 9.8, 0, .125, 0xf2c230); vc(56, -62, 9.3, 0, .13, ASPHALT);
+  vb(53.8, -62, 1, 6, .13, .01, 0xf2c230); vb(58.2, -62, 1, 6, .13, .01, 0xf2c230); vb(56, -62, 4.4, 1, .13, .01, 0xf2c230);
+  vs(56, 2, -62, 1.5, 1.2, 2.4, 0xf5f6f8);
+  vs(56, 2.15, -60.4, 1.1, .75, 1.1, 0x1d3b52);
+  vb(56, -66.6, .5, 5, 2.2, .5, 0xe9ecef);
+  vb(56, -69, .2, .5, 2.2, 1.5, 0x2467a6);
+  for (const s of [-1, 1]) {
+    vb(56 + s * 1.3, -62, .12, 4.4, .25, .12, 0x333840);
+    vb(56 + s * 1.2, -63, .1, .1, .25, 1.1, 0x333840); vb(56 + s * 1.2, -61, .1, .1, .25, 1.1, 0x333840);
+  }
+  solid(56, -62, 4, 6, 3);
+  vb(56, -62, .5, .5, 3.1, .5, 0x333840);                    // rotor mast
+
+  /* ----- shooting range ----- */
+  vb(-25, -72, 100, 6, 0, .05, 0x8a8d90);
+  vb(-60, -72, 1, 5.5, 0, 1.1, 0x6b6f75, true); vb(-62.5, -72, 5, 6, 2.6, .3, 0x5a5f66);
+  for (const pz of [-74.5, -69.5]) vb(-64.5, pz, .3, .3, 0, 2.6, 0x333840);
+  vb(-17, -75.8, 85, .4, 0, 1.2, 0x6b6f75, true); vb(-17, -68.2, 85, .4, 0, 1.2, 0x6b6f75, true);
+  vb(27, -72, 6, 8, 0, 3.5, 0x8a7a5c, true);
+  for (const tx of [-35, -18, -1, 16]) {
+    vb(tx, -72, .15, .15, 0, 1.2, 0x444444); vb(tx, -72, .15, 1.4, 1.2, 1.4, 0xffffff); vb(tx + .1, -72, .17, .9, 1.45, .9, 0xd63b2f);
+  }
+
+  /* ----- barbecue patio ----- */
+  vb(-26, -10, 18, 10, 0, .08, PAVER);
+  vb(-31, -12, 2.4, 1.2, .08, 1.1, 0x222428, true);
+  vb(-24, -8, 4, 1.8, .08, .8, WOOD, true);
+  for (const [cx2, cz2] of [[-26.5, -8], [-21.5, -8], [-24, -6.2], [-24, -9.8]]) vb(cx2, cz2, .8, .8, .08, .6, 0x3a2a1c);
+  vc(-24, -8, .08, .08, 2.7, 0xcccccc); vcone(-24, 2.7, -8, 2.7, .7, 0xd63b2f);
+  vc(-18, -12, 1, 0, .5, 0x555a60); vs(-18, .75, -12, .5, .45, .5, 0xff8a2a);
+
+  /* ----- garden: hedges, trees, flag pole ----- */
+  vb(-20, 38.8, 24, .8, 0, 1, HEDGE); vb(20, 38.8, 24, .8, 0, 1, HEDGE);
+  const gardenTrees = [
+    [-72, 62, "oak"], [72, 62, "oak"], [-30, 60, "pine"], [30, 60, "pine"], [-68, 54, "cypress"], [70, 48, "cypress"],
+    [-30, -30, "birch"], [30, -52, "oak"], [70, -30, "oak"], [-76, -30, "birch"], [-8, -60, "pine"], [10, -58, "birch"],
+    [72, 36, "oak"], [-76, 38, "oak"], [36, 62, "birch"], [-36, 62, "birch"]
+  ];
+  for (const [tx, tz, species] of gardenTrees) plantTree(X + tx, Z + tz, species, rand(.9, 1.2));
+  vc(12, 70, .12, 0, 9, 0xdddddd); vlamp(12, 9.1, 70, .25, 0xd4af37);
+
+  // gate sign
+  const sign = villaSignTexture(VILLA_NAME);
+  for (const side of [1, -1]) {
+    const board = new THREE.Mesh(
+      new THREE.PlaneGeometry(13, 1.6),
+      new THREE.MeshBasicMaterial({ map: sign })
+    );
+    board.position.set(X, GY + 4.55, Z + 79.4 + side * .38);
+    if (side < 0) board.rotation.y = Math.PI;
+    world.add(board);
+  }
+
+  /* ----- flush the merged / instanced parts ----- */
+  makeInstanced(boxGeo, villaWhiteMat, boxes);
+  makeInstanced(cylinderGeo, villaWhiteMat, cyls);
+  makeInstanced(sphereGeo, villaWhiteMat, sphs);
+  makeInstanced(treeGeo.cone, villaWhiteMat, cones);
+  makeInstanced(sphereGeo, villaLampMat, lamps);
+
+  villaState.waterMat = new THREE.MeshLambertMaterial({
+    color: 0x2aa9d8, transparent: true, opacity: .7, depthWrite: false
+  });
+  makeInstanced(boxGeo, villaState.waterMat, waters);
+  makeInstanced(cylinderGeo, villaState.waterMat, waterCyls);
+
+  /* ----- moving parts: gate, fountain, rotors, flag ----- */
+  const dynamic = new THREE.Group();
+  dynamic.userData.dynamic = true;
+  world.add(dynamic);
+
+  const gateMat = new THREE.MeshLambertMaterial({ color: 0x20242a });
+  const goldMat = new THREE.MeshLambertMaterial({ color: GOLD });
+
+  for (const s of [-1, 1]) {
+    const panel = new THREE.Group();
+    const slab = new THREE.Mesh(boxGeo, gateMat);
+    slab.scale.set(6.6, 2.6, .25);
+    slab.position.y = 1.5;
+    panel.add(slab);
+    for (let i = -3; i <= 3; i++) {
+      const bar = new THREE.Mesh(boxGeo, goldMat);
+      bar.scale.set(.1, 3, .35);
+      bar.position.set(i * .9, 1.5, 0);
+      panel.add(bar);
+    }
+    panel.position.set(X + s * 3.3, GY, Z + 79.4);
+    dynamic.add(panel);
+    villaState.gatePanels.push({ panel, side: s });
+
+    const collider = { x: X + s * 3.3, z: Z + 79.4, width: 6.8, depth: 1, height: 3 };
+    buildings.push(collider);
+    villaState.gateColliders.push({ collider, baseX: collider.x });
+  }
+
+  const dropMat = new THREE.MeshBasicMaterial({ color: 0xcfeeff });
+  for (let i = 0; i < 12; i++) {
+    const drop = new THREE.Mesh(sphereGeo, dropMat);
+    drop.scale.setScalar(.14);
+    dynamic.add(drop);
+    villaState.droplets.push(drop);
+  }
+
+  const bladeMat = new THREE.MeshLambertMaterial({ color: 0x2b2f36 });
+  const rotorMain = new THREE.Group();
+  for (const ry of [0, Math.PI / 2]) {
+    const blade = new THREE.Mesh(boxGeo, bladeMat);
+    blade.scale.set(9, .05, .35);
+    blade.rotation.y = ry;
+    rotorMain.add(blade);
+  }
+  rotorMain.position.set(X + 56, GY + 3.75, Z - 62);
+  dynamic.add(rotorMain);
+  villaState.rotorMain = rotorMain;
+
+  const rotorTail = new THREE.Group();
+  const tailBlade = new THREE.Mesh(boxGeo, bladeMat);
+  tailBlade.scale.set(.05, 1.5, .2);
+  rotorTail.add(tailBlade);
+  rotorTail.position.set(X + 56.35, GY + 3.2, Z - 68.8);
+  dynamic.add(rotorTail);
+  villaState.rotorTail = rotorTail;
+
+  const flag = new THREE.Mesh(
+    new THREE.PlaneGeometry(2.4, 1.4),
+    new THREE.MeshLambertMaterial({ color: 0x2467a6, side: THREE.DoubleSide })
+  );
+  flag.position.set(X + 13.3, GY + 8, Z + 70);
+  dynamic.add(flag);
+  villaState.flag = flag;
+
+  /* ----- the owner's car collection ----- */
+  const models = [["sport", 0xe33b2e], ["supercar", 0xf2c230], ["suv", 0x202a35], ["sedan", 0x2467a6], ["jeep", 0x47714b]];
+  models.forEach(([type, color], i) => {
+    const mesh = createCar(color, type, false, false);
+    const cx = X - 69 + i * 6, cz = Z + 17;
+    mesh.position.set(cx, 0, cz);
+    scene.add(mesh);
+    buildings.push({ x: cx, z: cz, width: 2.8, depth: 5.4, height: 1.8 });
+    villaState.showcase.push({ mesh, type, color, x: cx, z: cz });
+  });
+
+  villaState.ready = true;
+}
+
+function villaTourPoints() {
+  const X = VILLA.x, Z = VILLA.z;
+  return [
+    P(X, Z + 70, "ENTER THROUGH THE GATE"),
+    P(X, Z + 58, "THE FOUNTAIN"),
+    P(X, Z + 19, "THE LIVING ROOM"),
+    P(X + 20, Z + 22, "THE HOME CINEMA"),
+    P(X + 17, Z + 6, "THE MASTER BEDROOM"),
+    P(X - 22, Z + 19, "THE KITCHEN"),
+    P(X, Z - 8, "THE POOL DECK"),
+    P(X + 28, Z - 22, "THE SPA"),
+    P(X + 46, Z - 34, "THE FITNESS CENTER"),
+    P(X - 57, Z - 50, "THE TENNIS COURT"),
+    P(X + 56, Z - 52, "THE HELIPAD"),
+    P(X - 57, Z + 25, "THE GARAGE"),
+    P(X - 64, Z - 72, "THE SHOOTING RANGE")
+  ];
+}
+
+function villaRangeTargets() {
+  const X = VILLA.x, Z = VILLA.z;
+  return [
+    { x: X - 35, z: Z - 72, y: 1.5 }, { x: X - 18, z: Z - 72, y: 1.5 },
+    { x: X - 1, z: Z - 72, y: 1.5 }, { x: X + 16, z: Z - 72, y: 1.5 },
+    { x: X - 44, z: Z - 72, y: 2.7 }, { x: X - 26, z: Z - 72, y: 2.7 },
+    { x: X - 9, z: Z - 72, y: 2.7 }, { x: X + 8, z: Z - 72, y: 2.7 }
+  ];
+}
+
+function findShowcaseCar() {
+  let best = null;
+  for (const entry of villaState.showcase) {
+    const dist = Math.hypot(entry.x - player.position.x, entry.z - player.position.z);
+    if (dist < 6 && (!best || dist < best.dist)) best = { entry, dist };
+  }
+  return best;
+}
+
+function takeShowcaseCar(entry) {
+  if (!isOwner()) {
+    showMessage("PRIVATE COLLECTION — OWNER ONLY");
+    return;
+  }
+  spawnVehicle(entry.type);
+  car.userData.paint.color.setHex(entry.color);
+  showMessage("YOUR " + VEHICLES[entry.type].name + " IS READY — PRESS E TO GET IN");
+}
+
+function goHome() {
+  if (!started || paused || playerDead) return;
+
+  if (!isOwner()) {
+    showMessage("ONLY THE OWNER CAN TELEPORT HOME");
+    return;
+  }
+
+  if (ridingIn) leaveSeat(true);
+
+  if (driving) {
+    placeCar(VILLA.x + 8, VILLA.z + 60, Math.PI);
+  } else {
+    player.position.set(VILLA.x, 0, VILLA.z + 58);
+    playerRotation = Math.PI;
+    player.rotation.y = playerRotation;
+    playerGround = 0;
+    jumpOffset = 0;
+  }
+
+  showMessage("WELCOME HOME");
+}
+
+function villaTip(text) {
+  if (villaState.tipTimer > 0) return;
+  villaState.tipTimer = 8;
+  showMessage(text);
+}
+
+function updateVilla(dt) {
+  if (!villaState.ready) return;
+
+  villaState.time += dt;
+  villaState.noticeTimer = Math.max(0, villaState.noticeTimer - dt);
+  villaState.tipTimer = Math.max(0, villaState.tipTimer - dt);
+
+  const owner = isOwner();
+  const subject = subjectPosition();
+  const X = VILLA.x, Z = VILLA.z;
+
+  // gate: only opens for the owner
+  const nearGate = Math.hypot(subject.x - X, subject.z - (Z + 79.4)) < 16;
+  villaState.gateOpen += ((owner && nearGate ? 1 : 0) - villaState.gateOpen) * Math.min(1, dt * 2.5);
+
+  for (const { panel, side } of villaState.gatePanels) {
+    panel.position.x = X + side * (3.3 + 8.2 * villaState.gateOpen);
+  }
+  for (const { collider, baseX } of villaState.gateColliders) {
+    collider.x = villaState.gateOpen > .85 ? 1e7 : baseX;
+  }
+
+  if (!owner && nearGate && villaState.noticeTimer <= 0) {
+    villaState.noticeTimer = 9;
+    showMessage("PRIVATE PROPERTY — " + VILLA_NAME + "  (OWNER ONLY)");
+  }
+
+  if (owner && started && !villaState.greeted) {
+    villaState.greeted = true;
+    showMessage("WELCOME, OWNER — PRESS O TO TELEPORT HOME");
+  }
+
+  // animations
+  const t = villaState.time;
+  villaState.rotorMain.rotation.y += dt * 22;
+  villaState.rotorTail.rotation.x += dt * 30;
+  villaState.flag.rotation.y = Math.sin(t * 3) * .35;
+  villaState.waterMat.opacity = .68 + Math.sin(t * 2) * .06;
+
+  villaState.droplets.forEach((drop, i) => {
+    const phase = (t * 1.2 + i / villaState.droplets.length) % 1;
+    const angle = i * (Math.PI * 2 / villaState.droplets.length);
+    const radius = .4 + 2.3 * phase;
+    drop.position.set(
+      X + Math.cos(angle) * radius,
+      -.44 + 2.7 + 6.4 * phase * (1 - phase) - 1.5 * phase,
+      Z + 48 + Math.sin(angle) * radius
+    );
+  });
+
+  // facility effects (on foot, inside the estate)
+  if (driving || ridingIn || playerDead) return;
+
+  const px = player.position.x, pz = player.position.z;
+
+  if (Math.hypot(px - VILLA_SPA.x, pz - VILLA_SPA.z) < VILLA_SPA.r + .6 && hp < MAX_HP) {
+    hp = Math.min(MAX_HP, hp + 12 * dt);
+    villaTip("THE SPA IS HEALING YOU");
+  } else if (px > VILLA_GYM.x0 && px < VILLA_GYM.x1 && pz > VILLA_GYM.z0 && pz < VILLA_GYM.z1 && stamina < STAMINA_MAX) {
+    stamina = Math.min(STAMINA_MAX, stamina + 45 * dt);
+    exhausted = false;
+    villaTip("FITNESS CENTER — STAMINA RESTORED");
+  } else if (px > VILLA_HOUSE.x0 && px < VILLA_HOUSE.x1 && pz > VILLA_HOUSE.z0 && pz < VILLA_HOUSE.z1 && hp < MAX_HP) {
+    hp = Math.min(MAX_HP, hp + 2.5 * dt);
+  }
+}
+
+/* =========================================================
    BUILD WORLD AND START LOOP
    ========================================================= */
 
@@ -5530,7 +6967,6 @@ createExtraBillboard(
 );
 
 createTraffic();
-createCheckpoints();
 
 for (let i = 0; i < CONFIG.MAX_PEDESTRIANS; i++) {
   createPedestrian();
@@ -6156,6 +7592,12 @@ function castRay(ox, oz, dx, dz, range) {
     if (hit >= 0 && hit < best) { best = hit; kind = "car"; ref = t; }
   }
 
+  for (const t of missionTargets) {
+    if (!t.alive) continue;
+    const hit = rayCircle(ox, oz, dx, dz, t.x, t.z, .95);
+    if (hit >= 0 && hit < best) { best = hit; kind = "target"; ref = t; }
+  }
+
   const own = rayCircle(ox, oz, dx, dz, car.position.x, car.position.z, 2.1);
   if (own >= 0 && own < best) { best = own; kind = "car"; ref = null; }
 
@@ -6184,6 +7626,7 @@ function findAimAngle(range) {
 
   for (const p of pedestrians) if (!p.dead) consider(p.mesh.position.x, p.mesh.position.z);
   for (const r of remotePlayers.values()) consider(r.root.position.x, r.root.position.z);
+  for (const t of missionTargets) if (t.alive) consider(t.x, t.z);
 
   return best;
 }
@@ -6237,6 +7680,8 @@ function playerFire() {
       hitMarker = .18;
       netHit(hit.ref.id, damage, currentWeapon);
       spawnImpact(hx, oy, hz, "person");
+    } else if (hit.kind === "target") {
+      popMissionTarget(hit.ref);
     } else {
       spawnImpact(hx, oy, hz, hit.kind === "car" ? "spark" : "dust");
     }
@@ -6312,6 +7757,7 @@ function damagePlayer(amount, source = "") {
 }
 
 function killPlayer() {
+  failMission("YOU DIED");
   playerDead = true;
   deathTimer = 3.5;
   reloading = false;
@@ -7260,6 +8706,16 @@ let qualityLocked = false;
 let fpsAverage = 60;
 let lowFpsTime = 0;
 
+let pixelRatioBase = 1;
+let renderScale = 1;
+let highFpsTime = 0;
+
+function applyPixelRatio() {
+  pixelRatio = pixelRatioBase * renderScale;
+  renderer.setPixelRatio(pixelRatio);
+  renderer.setSize(innerWidth, innerHeight);
+}
+
 function applyQuality(level) {
   quality = level;
   const high = level === 2;
@@ -7275,9 +8731,8 @@ function applyQuality(level) {
   for (const bird of skyBirds) bird.visible = high;
   for (const cloud of skyClouds) cloud.visible = level > 0;
 
-  pixelRatio = level === 0 ? (touchCapable ? .7 : .75) : Math.min(devicePixelRatio || 1, 1);
-  renderer.setPixelRatio(pixelRatio);
-  renderer.setSize(innerWidth, innerHeight);
+  pixelRatioBase = level === 0 ? (touchCapable ? .8 : .75) : Math.min(devicePixelRatio || 1, 1);
+  applyPixelRatio();
 }
 
 function cycleQuality() {
@@ -7291,19 +8746,45 @@ function monitorPerformance(raw) {
 
   fpsAverage += (1 / raw - fpsAverage) * .05;
 
-  if (qualityLocked || quality === 0 || !started) {
+  if (!started) {
+    lowFpsTime = 0;
+    highFpsTime = 0;
+    return;
+  }
+
+  // Sharpen the picture again when the device has plenty of headroom
+  if (fpsAverage > 56 && renderScale < 1) {
+    highFpsTime += raw;
+    if (highFpsTime > 10) {
+      highFpsTime = 0;
+      renderScale = Math.min(1, renderScale + .08);
+      applyPixelRatio();
+    }
+  } else {
+    highFpsTime = 0;
+  }
+
+  if (qualityLocked) {
     lowFpsTime = 0;
     return;
   }
 
-  if (fpsAverage < 32) {
+  if (fpsAverage < 30) {
     lowFpsTime += raw;
 
-    if (lowFpsTime > 4) {
-      applyQuality(quality - 1);
+    if (lowFpsTime > 3) {
       lowFpsTime = 0;
-      fpsAverage = 45;
-      showMessage("PERFORMANCE MODE: " + QUALITY_NAMES[quality]);
+      fpsAverage = 42;
+
+      // Phones lower the sharpness first (keeps the world detail), then the quality level
+      if ((touchCapable || quality === 0) && renderScale > .62) {
+        renderScale = Math.max(.6, renderScale - .12);
+        applyPixelRatio();
+        showMessage("SHARPNESS LOWERED FOR SMOOTHER PLAY");
+      } else if (quality > 0) {
+        applyQuality(quality - 1);
+        showMessage("PERFORMANCE MODE: " + QUALITY_NAMES[quality]);
+      }
     }
   } else {
     lowFpsTime = 0;
@@ -7362,7 +8843,8 @@ function animate() {
 
     updateCombat(dt);
     updateEffects(dt);
-    updateCheckpoint();
+    updateMission(dt);
+    updateVilla(dt);
     updateHUD(dt);
     updateCombatHud(dt);
     sendPlayerUpdate(dt);
